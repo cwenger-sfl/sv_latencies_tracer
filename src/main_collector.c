@@ -114,6 +114,9 @@ static void collector_match_subscriber(struct collector_state *st,
 		histogram_record(&sm->parsed_latency, delta_parsed);
 	}
 
+	metrics_record_interval(&st->metrics, r->app_id, r->sv_id,
+				r->smp_cnt, &hw_ts, &r->app_ts);
+
 	/* Track drops via subscriber records */
 	struct sv_frame_info info = {
 		.app_id = r->app_id,

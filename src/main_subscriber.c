@@ -108,6 +108,10 @@ static int run_direct(const struct sv_config *cfg)
 			histogram_record(&sm->parsed_latency, delta_parsed);
 		}
 
+		metrics_record_interval(&metrics, info.app_id, info.sv_id,
+					info.smp_cnt, &frame.hw_ts,
+					&frame.app_ts);
+
 		/* Track drops */
 		drop_tracker_process(&drops, &info);
 	}

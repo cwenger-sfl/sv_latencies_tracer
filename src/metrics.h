@@ -4,18 +4,28 @@
 
 #include "histogram.h"
 #include "drop_detector.h"
+#include <pthread.h>
 
 /* Per-stream metric data */
 struct sv_stream_metrics {
 	struct sv_stream_id id;
 	struct sv_histogram capture_latency;  /* T_app - T_hw */
 	struct sv_histogram parsed_latency;   /* T_parsed - T_hw */
+	struct sv_histogram interval_hw;      /* inter-sample, HW TS */
+	struct sv_histogram interval_app;     /* inter-sample, app TS */
 	int active;
+
+	/* Interval bookkeeping (guarded by metrics_state.interval_lock) */
+	uint16_t last_smp_cnt;
+	struct sv_timestamp last_hw_ts;
+	struct sv_timestamp last_app_ts;
+	int have_prev;
 };
 
 struct sv_metrics_state {
 	struct sv_stream_metrics streams[SV_MAX_STREAMS];
 	int num_streams;
+	pthread_mutex_t interval_lock;
 
 	/* System monitor counters */
 	_Atomic uint64_t kernel_oops_total;
@@ -32,6 +42,15 @@ struct sv_stream_metrics *metrics_get_stream(struct sv_metrics_state *ms,
 					     const char *sv_id);
 
 void metrics_init(struct sv_metrics_state *ms);
+
+/*
+ * Record the inter-sample interval between two consecutive SV frames of the
+ * same stream (sequential smpCnt, no drops). Updates interval bookkeeping.
+ */
+int metrics_record_interval(struct sv_metrics_state *ms, uint16_t app_id,
+			    const char *sv_id, uint16_t smp_cnt,
+			    const struct sv_timestamp *hw_ts,
+			    const struct sv_timestamp *app_ts);
 
 /*
  * Format all metrics in Prometheus text exposition format.

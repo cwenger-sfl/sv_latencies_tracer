@@ -13,6 +13,7 @@
 void metrics_init(struct sv_metrics_state *ms)
 {
 	memset(ms, 0, sizeof(*ms));
+	pthread_mutex_init(&ms->interval_lock, NULL);
 	atomic_store(&ms->link_up, 1);
 }
 
@@ -35,8 +36,38 @@ struct sv_stream_metrics *metrics_get_stream(struct sv_metrics_state *ms,
 	sv_copy_svid(s->id.sv_id, sv_id);
 	histogram_init(&s->capture_latency);
 	histogram_init(&s->parsed_latency);
+	histogram_init(&s->interval_hw);
+	histogram_init(&s->interval_app);
+	s->have_prev = 0;
 	s->active = 1;
 	return s;
+}
+
+int metrics_record_interval(struct sv_metrics_state *ms, uint16_t app_id,
+			    const char *sv_id, uint16_t smp_cnt,
+			    const struct sv_timestamp *hw_ts,
+			    const struct sv_timestamp *app_ts)
+{
+	struct sv_stream_metrics *s =
+		metrics_get_stream(ms, app_id, sv_id);
+	if (!s)
+		return -1;
+
+	pthread_mutex_lock(&ms->interval_lock);
+	if (s->have_prev &&
+	    smp_cnt == (uint16_t)(s->last_smp_cnt + 1)) {
+		histogram_record(&s->interval_hw,
+				 ts_delta_us(hw_ts, &s->last_hw_ts));
+		histogram_record(&s->interval_app,
+				 ts_delta_us(app_ts, &s->last_app_ts));
+	}
+	s->last_smp_cnt = smp_cnt;
+	s->last_hw_ts = *hw_ts;
+	s->last_app_ts = *app_ts;
+	s->have_prev = 1;
+	pthread_mutex_unlock(&ms->interval_lock);
+
+	return 0;
 }
 
 static int append_histogram(char **buf, size_t *cap, size_t *pos,
@@ -133,6 +164,18 @@ char *metrics_format(const struct sv_metrics_state *ms,
 				     "sv_parsed_latency_us",
 				     "Latency from NIC HW TS to post-parse (us)",
 				     &s->parsed_latency, aid, sid) < 0)
+			goto fail;
+
+		if (append_histogram(&buf, &cap, &pos,
+				     "sv_sv_interval_hw_us",
+				     "Interval between consecutive SV frames (HW timestamp)",
+				     &s->interval_hw, aid, sid) < 0)
+			goto fail;
+
+		if (append_histogram(&buf, &cap, &pos,
+				     "sv_sv_interval_app_us",
+				     "Interval between consecutive SV frames (app timestamp)",
+				     &s->interval_app, aid, sid) < 0)
 			goto fail;
 	}
 
