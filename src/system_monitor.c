@@ -129,7 +129,12 @@ static void *rt_throttle_monitor_thread(void *arg)
 	/* Try to enable the tracepoint */
 	int tfd = open(trace_path, O_WRONLY);
 	if (tfd >= 0) {
-		(void)write(tfd, "1", 1);
+		ssize_t written = write(tfd, "1", 1);
+		if (written < 0)
+			fprintf(stderr, "warning: failed to enable RT tracepoint: %s\n",
+				strerror(errno));
+		else if (written != 1)
+			fprintf(stderr, "warning: incomplete RT tracepoint enable write\n");
 		close(tfd);
 	}
 
