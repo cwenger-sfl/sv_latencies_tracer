@@ -46,6 +46,12 @@ int drop_tracker_process(struct sv_drop_tracker *dt,
 		return 0;
 	}
 
+	/* A producer restart can reset the sequence counter to zero. */
+	if (info->smp_cnt == 0 && s->last_smp_cnt != UINT16_MAX) {
+		s->last_smp_cnt = 0;
+		return 0;
+	}
+
 	uint16_t expected = (s->last_smp_cnt + 1) & 0xFFFF;
 	s->last_smp_cnt = info->smp_cnt;
 

@@ -104,6 +104,30 @@ static void test_wrap_with_gap(void)
 	printf(" OK\n");
 }
 
+static void test_reset_to_zero(void)
+{
+	printf("  test_reset_to_zero...");
+	struct sv_drop_tracker dt;
+	drop_tracker_init(&dt);
+
+	struct sv_frame_info info = make_info(0x4000, "S1", 100);
+	drop_tracker_process(&dt, &info);
+
+	info.smp_cnt = 0; /* producer restart */
+	assert(drop_tracker_process(&dt, &info) == 0);
+
+	const struct sv_drop_state *s = drop_tracker_find(&dt, 0x4000, "S1");
+	assert(s != NULL);
+	assert(s->last_smp_cnt == 0);
+	assert(atomic_load(&s->frames_dropped) == 0);
+
+	info.smp_cnt = 1;
+	assert(drop_tracker_process(&dt, &info) == 0);
+	assert(s->last_smp_cnt == 1);
+	assert(atomic_load(&s->frames_dropped) == 0);
+	printf(" OK\n");
+}
+
 static void test_multiple_streams(void)
 {
 	printf("  test_multiple_streams...");
@@ -132,6 +156,7 @@ int main(void)
 	test_multi_drop();
 	test_wrap_around();
 	test_wrap_with_gap();
+	test_reset_to_zero();
 	test_multiple_streams();
 	printf("All drop detector tests passed.\n");
 	return 0;
