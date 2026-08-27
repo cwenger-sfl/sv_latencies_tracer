@@ -53,6 +53,16 @@ static void apply_rt_settings(const struct sv_config *cfg)
 	}
 }
 
+static int warmup_active(const struct timespec *deadline)
+{
+	struct timespec now;
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+		return 0;
+
+	return now.tv_sec < deadline->tv_sec ||
+		(now.tv_sec == deadline->tv_sec && now.tv_nsec < deadline->tv_nsec);
+}
+
 static const char *timestamp_source_name(enum sv_timestamp_source source)
 {
 	switch (source) {
@@ -171,6 +181,20 @@ static int run_direct(const struct sv_config *cfg)
 
 	/* Keep monitoring and metrics threads off the real-time capture policy. */
 	apply_rt_settings(cfg);
+	struct timespec warmup_deadline;
+	if (clock_gettime(CLOCK_MONOTONIC, &warmup_deadline) < 0) {
+		perror("clock_gettime capture start");
+		if (cfg->live_histogram)
+			live_histogram_stop(&live_histogram);
+		sysmon_stop(&sysmon);
+		if (cfg->prometheus_enabled)
+			metrics_server_stop();
+		close_output_file(output);
+		capture_close(&capture);
+		return 1;
+	}
+	warmup_deadline.tv_sec += cfg->warmup_seconds;
+	int warmup_done = cfg->warmup_seconds == 0;
 
 	if (cfg->prometheus_enabled)
 		fprintf(stderr,
@@ -187,6 +211,11 @@ static int run_direct(const struct sv_config *cfg)
 				continue;
 			perror("capture_recv");
 			break;
+		}
+		if (!warmup_done) {
+			if (warmup_active(&warmup_deadline))
+				continue;
+			warmup_done = 1;
 		}
 
 		struct sv_frame_info info;

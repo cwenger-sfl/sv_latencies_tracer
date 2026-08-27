@@ -106,6 +106,7 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 | `-s` | `--sched-fifo` | SCHED_FIFO priority | disabled |
 | `-L` | `--live-histogram` | Show cumulative live histograms in direct mode | disabled |
 | `-T` | `--live-threshold-us` | Count live values above this threshold (us) | `250` |
+| `-w` | `--warmup-seconds` | Ignore measurements during startup | `0` |
 
 ## Live Console Histograms
 
@@ -116,6 +117,15 @@ per second, but `n`, `max`, and the threshold counter are never reset:
 ```bash
 sudo ./build/sv-subscriber -i eth0 -a 3 -s 2 --live-histogram
 ```
+
+To exclude startup transients, ignore the first second of reception:
+
+```bash
+sudo ./build/sv-subscriber -i eth0 --warmup-seconds 1 --live-histogram
+```
+
+Frames received during the warmup are not included in latency histograms,
+intervals, drop counters, or direct-mode TSV output.
 
 The background display thread remains under `SCHED_OTHER`. For each SV stream,
 it shows the selected-RX-timestamp-to-application latency and the application

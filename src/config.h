@@ -33,6 +33,7 @@ struct sv_config {
 	int      sched_priority;
 	int      live_histogram;
 	int      live_threshold_us;
+	int      warmup_seconds;  /* Ignore measurements during startup */
 	char     output_path[256];
 	int      output_path_set;
 };

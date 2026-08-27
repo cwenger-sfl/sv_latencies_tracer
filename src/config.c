@@ -41,6 +41,7 @@ void config_set_defaults(struct sv_config *cfg)
 	cfg->sched_priority = 0;
 	cfg->live_histogram = 0;
 	cfg->live_threshold_us = 250;
+	cfg->warmup_seconds = 0;
 	cfg->output_path_set = 0;
 }
 
@@ -64,6 +65,7 @@ void config_print_usage(const char *progname)
 		"  -s, --sched-fifo PRIO     Use SCHED_FIFO with given priority\n"
 		"  -L, --live-histogram      Show cumulative console histograms\n"
 		"  -T, --live-threshold-us N Count values above N us (default: 250)\n"
+		"  -w, --warmup-seconds N    Ignore measurements during startup (default: 0)\n"
 		"  -h, --help                Show this help\n",
 		progname);
 }
@@ -85,6 +87,7 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 		{"sched-fifo",     required_argument, NULL, 's'},
 		{"live-histogram", no_argument,       NULL, 'L'},
 		{"live-threshold-us", required_argument, NULL, 'T'},
+		{"warmup-seconds", required_argument, NULL, 'w'},
 		{"help",           no_argument,       NULL, 'h'},
 		{NULL, 0, NULL, 0},
 	};
@@ -92,7 +95,7 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 	/* Allow callers and unit tests to parse more than one argument vector. */
 	optind = 1;
 	int opt;
-	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:No:H:b:a:s:LT:h",
+	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:No:H:b:a:s:LT:w:h",
 				  long_opts, NULL)) != -1) {
 		switch (opt) {
 		case 'i':
@@ -201,6 +204,12 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 				return -1;
 			}
 			break;
+		case 'w':
+			if (parse_int(optarg, 0, 3600, &cfg->warmup_seconds) < 0) {
+				fprintf(stderr, "Invalid warmup duration: %s\n", optarg);
+				return -1;
+			}
+			break;
 		case 'h':
 			config_print_usage(argv[0]);
 			return -1;
@@ -226,6 +235,12 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 	    (cfg->role != SV_ROLE_SUBSCRIBER || cfg->mode != SV_MODE_DIRECT)) {
 		fprintf(stderr,
 			"Output files require sv-subscriber direct mode\n");
+		return -1;
+	}
+	if (cfg->warmup_seconds > 0 &&
+	    (cfg->role != SV_ROLE_SUBSCRIBER || cfg->mode != SV_MODE_DIRECT)) {
+		fprintf(stderr,
+			"Warmup duration requires sv-subscriber direct mode\n");
 		return -1;
 	}
 
