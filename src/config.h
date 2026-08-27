@@ -30,6 +30,8 @@ struct sv_config {
 	int      cpu_affinity;    /* -1 = unset */
 	int      sched_fifo;
 	int      sched_priority;
+	int      live_histogram;
+	int      live_threshold_us;
 };
 
 void config_set_defaults(struct sv_config *cfg);

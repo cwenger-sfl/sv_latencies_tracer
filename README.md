@@ -13,6 +13,7 @@ IEC 61850 Sample Values (SV) latency measurement tool for the [SEAPATH](https://
 - System health monitoring (link state, kernel oops, RT throttling)
 - Split-architecture support for virtualized deployments
 - Real-time scheduling (`SCHED_FIFO`) and CPU affinity pinning
+- Optional one-second live latency histograms in the console
 
 ## Building
 
@@ -89,6 +90,22 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 | `-b` | `--batch-size` | Batch size (split mode) | `256` |
 | `-a` | `--cpu-affinity` | Pin capture thread to CPU | unset |
 | `-s` | `--sched-fifo` | SCHED_FIFO priority | disabled |
+| `-L` | `--live-histogram` | Show live one-second histograms in direct mode | disabled |
+| `-T` | `--live-threshold-us` | Count live values above this threshold (us) | `250` |
+
+## Live Console Histograms
+
+Direct mode can display one-second windows without adding console work to the
+real-time capture thread:
+
+```bash
+sudo ./build/sv-subscriber -i eth0 -a 3 -s 2 --live-histogram
+```
+
+The background display thread remains under `SCHED_OTHER`. For each SV stream,
+it shows the hardware-timestamp-to-application latency and the application
+inter-frame interval, including min, p50, p99, max, a compact distribution, and
+the number of observations above the configured threshold.
 
 ## Prometheus Metrics
 

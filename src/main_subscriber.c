@@ -3,6 +3,7 @@
 #include "drop_detector.h"
 #include "frame_capture.h"
 #include "histogram.h"
+#include "live_histogram.h"
 #include "metrics.h"
 #include "protocol.h"
 #include "sv_parser.h"
@@ -60,6 +61,7 @@ static int run_direct(const struct sv_config *cfg)
 	struct sv_metrics_state metrics;
 	struct sv_drop_tracker drops;
 	struct sv_sysmon_ctx sysmon;
+	struct sv_live_histogram_ctx live_histogram;
 
 	metrics_init_with_max(&metrics, cfg->histogram_max_us);
 	drop_tracker_init(&drops);
@@ -74,6 +76,14 @@ static int run_direct(const struct sv_config *cfg)
 	}
 
 	if (sysmon_start(&sysmon, &metrics, cfg->interface) < 0) {
+		metrics_server_stop();
+		capture_close(&capture);
+		return 1;
+	}
+	if (cfg->live_histogram &&
+	    live_histogram_start(&live_histogram, &metrics,
+				 cfg->live_threshold_us) < 0) {
+		sysmon_stop(&sysmon);
 		metrics_server_stop();
 		capture_close(&capture);
 		return 1;
@@ -127,6 +137,8 @@ static int run_direct(const struct sv_config *cfg)
 	}
 
 	fprintf(stderr, "\nShutting down...\n");
+	if (cfg->live_histogram)
+		live_histogram_stop(&live_histogram);
 	sysmon_stop(&sysmon);
 	metrics_server_stop();
 	capture_close(&capture);

@@ -38,6 +38,8 @@ void config_set_defaults(struct sv_config *cfg)
 	cfg->cpu_affinity = -1;
 	cfg->sched_fifo = 0;
 	cfg->sched_priority = 0;
+	cfg->live_histogram = 0;
+	cfg->live_threshold_us = 250;
 }
 
 void config_print_usage(const char *progname)
@@ -56,6 +58,8 @@ void config_print_usage(const char *progname)
 		"  -b, --batch-size N        Batch size for split mode (default: 256)\n"
 		"  -a, --cpu-affinity N      CPU core to pin capture thread\n"
 		"  -s, --sched-fifo PRIO     Use SCHED_FIFO with given priority\n"
+		"  -L, --live-histogram      Show one-second console histograms\n"
+		"  -T, --live-threshold-us N Count values above N us (default: 250)\n"
 		"  -h, --help                Show this help\n",
 		progname);
 }
@@ -73,12 +77,14 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 		{"batch-size",     required_argument, NULL, 'b'},
 		{"cpu-affinity",   required_argument, NULL, 'a'},
 		{"sched-fifo",     required_argument, NULL, 's'},
+		{"live-histogram", no_argument,       NULL, 'L'},
+		{"live-threshold-us", required_argument, NULL, 'T'},
 		{"help",           no_argument,       NULL, 'h'},
 		{NULL, 0, NULL, 0},
 	};
 
 	int opt;
-	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:H:b:a:s:h",
+	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:H:b:a:s:LT:h",
 				  long_opts, NULL)) != -1) {
 		switch (opt) {
 		case 'i':
@@ -165,6 +171,16 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 			}
 			cfg->sched_fifo = 1;
 			break;
+		case 'L':
+			cfg->live_histogram = 1;
+			break;
+		case 'T':
+			if (parse_int(optarg, 0, SV_HISTOGRAM_MAX_US,
+				      &cfg->live_threshold_us) < 0) {
+				fprintf(stderr, "Invalid live threshold: %s\n", optarg);
+				return -1;
+			}
+			break;
 		case 'h':
 			config_print_usage(argv[0]);
 			return -1;
@@ -172,6 +188,19 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 			config_print_usage(argv[0]);
 			return -1;
 		}
+	}
+
+	if (cfg->live_histogram &&
+	    (cfg->role != SV_ROLE_SUBSCRIBER || cfg->mode != SV_MODE_DIRECT)) {
+		fprintf(stderr,
+			"Live histograms require sv-subscriber direct mode\n");
+		return -1;
+	}
+	if (cfg->live_histogram &&
+	    cfg->live_threshold_us > cfg->histogram_max_us) {
+		fprintf(stderr,
+			"Live threshold must not exceed histogram maximum\n");
+		return -1;
 	}
 
 	return 0;
