@@ -131,7 +131,16 @@ The background display thread remains under `SCHED_OTHER`. For each SV stream,
 it shows the selected-RX-timestamp-to-application latency and the application
 inter-frame interval, including min, p50, p99, max, a compact distribution, and
 the number of observations above the configured threshold. Hardware, software,
-and application-fallback timestamp counts are shown separately.
+and application-fallback timestamp counts are shown separately. When both RX
+timestamps are delivered for a frame, it also shows hardware-to-application,
+software-to-application, and estimated hardware-to-software latency.
+
+Hardware timestamps use the interface PHC while software RX timestamps use
+`CLOCK_REALTIME`, so the tracer never subtracts the two raw timestamps. It
+instead estimates hardware-to-software latency as `(HW->app) - (SW->app)`,
+where each elapsed duration is calculated within its own clock domain. The PHC
+read happens immediately before the realtime read; the estimate can therefore
+be lower by the small time between those two reads.
 
 The tracer does not call `SIOCSHWTSTAMP`: that configuration is global to the
 network device and may be owned by `ptp4l` or another process. It requests both
@@ -148,6 +157,9 @@ latency histogram.
 | `sv_capture_latency_us_max` | gauge | Maximum RX-timestamp-to-application latency since start (µs) |
 | `sv_capture_latency_us_observations_total` | counter | Count of each exact observed latency (µs), including values above 35000 |
 | `sv_parsed_latency_us` | histogram | Selected RX timestamp to post-parse (µs) |
+| `sv_hw_timestamp_to_app_latency_us` | histogram | Hardware RX timestamp to application PHC read (µs) |
+| `sv_sw_timestamp_to_app_latency_us` | histogram | Software RX timestamp to application realtime read (µs) |
+| `sv_hw_to_sw_estimated_latency_us` | histogram | Estimated hardware-to-software RX latency (µs) |
 | `sv_timestamp_source_frames_total` | counter | Frames selected from hardware, software, or application-fallback timestamps |
 | `sv_frames_total` | counter | Total SV frames received per stream |
 | `sv_drops_total` | counter | Dropped SV frames per stream (smpCnt gaps) |

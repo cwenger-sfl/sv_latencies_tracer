@@ -240,6 +240,26 @@ static int run_direct(const struct sv_config *cfg)
 		if (sm) {
 			histogram_record(&sm->capture_latency, delta_capture);
 			histogram_record(&sm->parsed_latency, delta_parsed);
+			if (frame.have_hw_rx_ts && frame.have_app_phc_ts) {
+				int64_t hw_to_app_ns = ts_delta_ns(
+					&frame.app_phc_ts, &frame.hw_rx_ts);
+				histogram_record(&sm->hw_to_app_latency,
+						hw_to_app_ns / 1000);
+				if (frame.have_sw_rx_ts) {
+					int64_t sw_to_app_ns = ts_delta_ns(
+						&frame.app_realtime_ts,
+						&frame.sw_rx_ts);
+					histogram_record(&sm->hw_to_sw_latency,
+							(hw_to_app_ns -
+							 sw_to_app_ns) / 1000);
+				}
+			}
+			if (frame.have_sw_rx_ts) {
+				int64_t sw_to_app_ns = ts_delta_ns(
+					&frame.app_realtime_ts, &frame.sw_rx_ts);
+				histogram_record(&sm->sw_to_app_latency,
+						sw_to_app_ns / 1000);
+			}
 			metrics_record_timestamp_source(sm,
 						frame.timestamp_source);
 		}

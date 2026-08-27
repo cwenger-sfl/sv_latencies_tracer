@@ -42,6 +42,9 @@ static void test_intervals_count_every_frame_pair(void)
 	assert(stream != NULL);
 	histogram_record(&stream->capture_latency, 23);
 	histogram_record(&stream->capture_latency, 728);
+	histogram_record(&stream->hw_to_app_latency, 245);
+	histogram_record(&stream->sw_to_app_latency, 8);
+	histogram_record(&stream->hw_to_sw_latency, 237);
 	metrics_record_timestamp_source(stream, SV_TIMESTAMP_SOURCE_SOFTWARE);
 	metrics_record_timestamp_source(stream, SV_TIMESTAMP_SOURCE_SOFTWARE);
 	assert(atomic_load(&stream->interval_hw.count) == 2);
@@ -65,6 +68,12 @@ static void test_intervals_count_every_frame_pair(void)
 		      "sv_capture_latency_us_observations_total{appid=\"0x4000\",svid=\"S1\",latency_us=\"727\"}") == NULL);
 	assert(strstr(output,
 		      "sv_capture_latency_us_max{appid=\"0x4000\",svid=\"S1\"} 728") != NULL);
+	assert(strstr(output,
+		      "sv_hw_timestamp_to_app_latency_us_count{appid=\"0x4000\",svid=\"S1\"} 1") != NULL);
+	assert(strstr(output,
+		      "sv_sw_timestamp_to_app_latency_us_sum{appid=\"0x4000\",svid=\"S1\"} 8") != NULL);
+	assert(strstr(output,
+		      "sv_hw_to_sw_estimated_latency_us_bucket{appid=\"0x4000\",svid=\"S1\",le=\"237\"} 1") != NULL);
 	assert(strstr(output,
 		      "sv_timestamp_source_frames_total{appid=\"0x4000\",svid=\"S1\",source=\"hardware\"} 0") != NULL);
 	assert(strstr(output,

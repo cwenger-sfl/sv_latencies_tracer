@@ -41,6 +41,9 @@ Exposed by `sv-subscriber` on `/metrics`:
 | `sv_capture_latency_us_max`  | gauge     | Maximum selected RX TS to app latency         |
 | `sv_capture_latency_us_observations_total` | counter | Count per exact observed latency (µs), including values above 35000 |
 | `sv_parsed_latency_us`       | histogram | Selected RX TS to post-parse (µs)             |
+| `sv_hw_timestamp_to_app_latency_us` | histogram | Hardware RX TS to app PHC read (µs)      |
+| `sv_sw_timestamp_to_app_latency_us` | histogram | Software RX TS to app realtime read (µs) |
+| `sv_hw_to_sw_estimated_latency_us` | histogram | Estimated hardware-to-software RX latency (µs) |
 | `sv_timestamp_source_frames_total` | counter | Frames by selected timestamp source       |
 | `sv_sv_interval_hw_us`       | histogram | Interval between frames (selected RX timestamp, µs) |
 | `sv_sv_interval_app_us`      | histogram | Interval between frames (app timestamp, µs)  |

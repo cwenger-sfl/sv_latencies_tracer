@@ -53,12 +53,20 @@ struct sv_stream_metrics *metrics_get_stream(struct sv_metrics_state *ms,
 	sv_copy_svid(s->id.sv_id, sv_id);
 	histogram_init_with_max(&s->capture_latency, ms->histogram_max_us);
 	histogram_init_with_max(&s->parsed_latency, ms->histogram_max_us);
+	histogram_init_with_max(&s->hw_to_app_latency, ms->histogram_max_us);
+	histogram_init_with_max(&s->sw_to_app_latency, ms->histogram_max_us);
+	histogram_init_with_max(&s->hw_to_sw_latency, ms->histogram_max_us);
 	histogram_init_with_max(&s->interval_hw, ms->histogram_max_us);
 	histogram_init_with_max(&s->interval_app, ms->histogram_max_us);
 	if (!s->capture_latency.buckets || !s->parsed_latency.buckets ||
+	    !s->hw_to_app_latency.buckets || !s->sw_to_app_latency.buckets ||
+	    !s->hw_to_sw_latency.buckets ||
 	    !s->interval_hw.buckets || !s->interval_app.buckets) {
 		histogram_destroy(&s->capture_latency);
 		histogram_destroy(&s->parsed_latency);
+		histogram_destroy(&s->hw_to_app_latency);
+		histogram_destroy(&s->sw_to_app_latency);
+		histogram_destroy(&s->hw_to_sw_latency);
 		histogram_destroy(&s->interval_hw);
 		histogram_destroy(&s->interval_app);
 		ms->num_streams--;
@@ -356,6 +364,21 @@ char *metrics_format(const struct sv_metrics_state *ms,
 				     "sv_parsed_latency_us",
 				     "Latency from selected RX timestamp to post-parse (us)",
 				     &s->parsed_latency, aid, sid) < 0)
+			goto fail;
+		if (append_histogram(&buf, &cap, &pos,
+				     "sv_hw_timestamp_to_app_latency_us",
+				     "Latency from hardware RX timestamp to app PHC read (us)",
+				     &s->hw_to_app_latency, aid, sid) < 0)
+			goto fail;
+		if (append_histogram(&buf, &cap, &pos,
+				     "sv_sw_timestamp_to_app_latency_us",
+				     "Latency from software RX timestamp to app realtime read (us)",
+				     &s->sw_to_app_latency, aid, sid) < 0)
+			goto fail;
+		if (append_histogram(&buf, &cap, &pos,
+				     "sv_hw_to_sw_estimated_latency_us",
+				     "Estimated hardware-to-software RX latency from elapsed-duration difference (us)",
+				     &s->hw_to_sw_latency, aid, sid) < 0)
 			goto fail;
 
 		if (pos + 1024 > cap) {

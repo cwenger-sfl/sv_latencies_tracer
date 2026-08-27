@@ -193,9 +193,18 @@ static void render_live_histograms(struct sv_live_histogram_ctx *ctx,
 	for (int i = 0; i < num_streams; i++) {
 		struct sv_stream_metrics *stream = streams[i];
 		struct live_stats capture;
+		struct live_stats hw_to_app;
+		struct live_stats sw_to_app;
+		struct live_stats hw_to_sw;
 		struct live_stats interval;
 		snapshot_cumulative(&stream->capture_latency, snapshot,
 				    ctx->threshold_us, &capture);
+		snapshot_cumulative(&stream->hw_to_app_latency, snapshot,
+				    ctx->threshold_us, &hw_to_app);
+		snapshot_cumulative(&stream->sw_to_app_latency, snapshot,
+				    ctx->threshold_us, &sw_to_app);
+		snapshot_cumulative(&stream->hw_to_sw_latency, snapshot,
+				    ctx->threshold_us, &hw_to_sw);
 		snapshot_cumulative(&stream->interval_app, snapshot,
 				    ctx->threshold_us, &interval);
 
@@ -211,6 +220,15 @@ static void render_live_histograms(struct sv_live_histogram_ctx *ctx,
 				&stream->timestamp_application_total, memory_order_relaxed));
 		print_stats("RX TS -> application", &capture, ctx->threshold_us,
 			    stream->capture_latency.max_bucket_us);
+		print_stats("HW TS -> application", &hw_to_app,
+			    ctx->threshold_us,
+			    stream->hw_to_app_latency.max_bucket_us);
+		print_stats("SW TS -> application", &sw_to_app,
+			    ctx->threshold_us,
+			    stream->sw_to_app_latency.max_bucket_us);
+		print_stats("Estimated HW -> SW", &hw_to_sw,
+			    ctx->threshold_us,
+			    stream->hw_to_sw_latency.max_bucket_us);
 		print_stats("Application interval", &interval,
 			    ctx->threshold_us,
 			    stream->interval_app.max_bucket_us);

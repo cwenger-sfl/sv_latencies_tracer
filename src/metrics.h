@@ -11,6 +11,9 @@ struct sv_stream_metrics {
 	struct sv_stream_id id;
 	struct sv_histogram capture_latency;  /* T_app - T_rx */
 	struct sv_histogram parsed_latency;   /* T_parsed - T_rx */
+	struct sv_histogram hw_to_app_latency; /* PHC app time - HW RX TS */
+	struct sv_histogram sw_to_app_latency; /* realtime app time - SW RX TS */
+	struct sv_histogram hw_to_sw_latency;  /* estimated driver RX duration */
 	struct sv_histogram interval_hw;      /* inter-sample, selected RX TS */
 	struct sv_histogram interval_app;     /* inter-sample, app TS */
 	_Atomic int64_t interval_hw_current_ns; /* latest inter-frame interval */

@@ -239,6 +239,13 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 		return -1;
 
 	frame->len = (size_t)n;
+	frame->hw_rx_ts = (struct sv_timestamp){0, 0};
+	frame->sw_rx_ts = (struct sv_timestamp){0, 0};
+	frame->app_phc_ts = (struct sv_timestamp){0, 0};
+	frame->app_realtime_ts = (struct sv_timestamp){0, 0};
+	frame->have_hw_rx_ts = false;
+	frame->have_sw_rx_ts = false;
+	frame->have_app_phc_ts = false;
 
 	/* Extract timestamps from cmsg. */
 	struct sv_timestamp hw_ts = {0, 0};
@@ -269,23 +276,47 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 		}
 	}
 
+	/*
+	 * Read both application clocks immediately after recvmsg. This preserves
+	 * each RX timestamp's clock domain while allowing their elapsed durations
+	 * to be compared without subtracting PHC and CLOCK_REALTIME directly.
+	 */
+	if (have_hw_ts && ctx->phc_fd >= 0) {
+		struct timespec app_phc_now;
+		if (clock_gettime(ctx->phc_clockid, &app_phc_now) == 0) {
+			frame->app_phc_ts = timespec_to_svts(&app_phc_now);
+			frame->have_app_phc_ts = true;
+		}
+	}
+
+	frame->hw_rx_ts = hw_ts;
+	frame->sw_rx_ts = sw_ts;
+	frame->have_hw_rx_ts = have_hw_ts;
+	frame->have_sw_rx_ts = have_sw_ts;
+
 	/* A hardware timestamp is comparable only when its PHC is available. */
-	int use_hw_ts = have_hw_ts && ctx->phc_fd >= 0;
+	int use_hw_ts = have_hw_ts && frame->have_app_phc_ts;
 	int use_sw_ts = !use_hw_ts && have_sw_ts;
-	clockid_t app_clock = use_hw_ts ? ctx->phc_clockid : CLOCK_REALTIME;
-	struct timespec app_now;
-	if (clock_gettime(app_clock, &app_now) < 0)
-		return -1;
-	frame->app_ts = timespec_to_svts(&app_now);
-	frame->timestamp_clockid = app_clock;
+	if (have_sw_ts || !use_hw_ts) {
+		struct timespec app_realtime_now;
+		if (clock_gettime(CLOCK_REALTIME, &app_realtime_now) < 0)
+			return -1;
+		frame->app_realtime_ts = timespec_to_svts(&app_realtime_now);
+	}
 	if (use_hw_ts) {
 		frame->rx_ts = hw_ts;
+		frame->app_ts = frame->app_phc_ts;
+		frame->timestamp_clockid = ctx->phc_clockid;
 		frame->timestamp_source = SV_TIMESTAMP_SOURCE_HARDWARE;
 	} else if (use_sw_ts) {
 		frame->rx_ts = sw_ts;
+		frame->app_ts = frame->app_realtime_ts;
+		frame->timestamp_clockid = CLOCK_REALTIME;
 		frame->timestamp_source = SV_TIMESTAMP_SOURCE_SOFTWARE;
 	} else {
-		frame->rx_ts = frame->app_ts;
+		frame->rx_ts = frame->app_realtime_ts;
+		frame->app_ts = frame->app_realtime_ts;
+		frame->timestamp_clockid = CLOCK_REALTIME;
 		frame->timestamp_source = SV_TIMESTAMP_SOURCE_APPLICATION;
 	}
 

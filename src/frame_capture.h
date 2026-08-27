@@ -19,6 +19,13 @@ struct sv_capture_ctx {
 struct sv_captured_frame {
 	uint8_t            data[SV_FRAME_MAX_LEN];
 	size_t             len;
+	struct sv_timestamp hw_rx_ts;  /* Raw hardware timestamp (PHC domain) */
+	struct sv_timestamp sw_rx_ts;  /* Software RX timestamp (CLOCK_REALTIME) */
+	struct sv_timestamp app_phc_ts;
+	struct sv_timestamp app_realtime_ts;
+	bool                have_hw_rx_ts;
+	bool                have_sw_rx_ts;
+	bool                have_app_phc_ts;
 	struct sv_timestamp rx_ts;     /* Selected hardware/software RX timestamp */
 	struct sv_timestamp app_ts;    /* Application timestamp (right after recvmsg) */
 	clockid_t          timestamp_clockid; /* Clock used for app_ts and parsed_ts */
