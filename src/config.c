@@ -58,7 +58,7 @@ void config_print_usage(const char *progname)
 		"  -b, --batch-size N        Batch size for split mode (default: 256)\n"
 		"  -a, --cpu-affinity N      CPU core to pin capture thread\n"
 		"  -s, --sched-fifo PRIO     Use SCHED_FIFO with given priority\n"
-		"  -L, --live-histogram      Show one-second console histograms\n"
+		"  -L, --live-histogram      Show cumulative console histograms\n"
 		"  -T, --live-threshold-us N Count values above N us (default: 250)\n"
 		"  -h, --help                Show this help\n",
 		progname);

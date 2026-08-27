@@ -13,7 +13,7 @@ IEC 61850 Sample Values (SV) latency measurement tool for the [SEAPATH](https://
 - System health monitoring (link state, kernel oops, RT throttling)
 - Split-architecture support for virtualized deployments
 - Real-time scheduling (`SCHED_FIFO`) and CPU affinity pinning
-- Optional one-second live latency histograms in the console
+- Optional cumulative live latency histograms in the console
 
 ## Building
 
@@ -90,13 +90,14 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 | `-b` | `--batch-size` | Batch size (split mode) | `256` |
 | `-a` | `--cpu-affinity` | Pin capture thread to CPU | unset |
 | `-s` | `--sched-fifo` | SCHED_FIFO priority | disabled |
-| `-L` | `--live-histogram` | Show live one-second histograms in direct mode | disabled |
+| `-L` | `--live-histogram` | Show cumulative live histograms in direct mode | disabled |
 | `-T` | `--live-threshold-us` | Count live values above this threshold (us) | `250` |
 
 ## Live Console Histograms
 
-Direct mode can display one-second windows without adding console work to the
-real-time capture thread:
+Direct mode can display cumulative measurements since listening started without
+adding console work to the real-time capture thread. The display refreshes once
+per second, but `n`, `max`, and the threshold counter are never reset:
 
 ```bash
 sudo ./build/sv-subscriber -i eth0 -a 3 -s 2 --live-histogram

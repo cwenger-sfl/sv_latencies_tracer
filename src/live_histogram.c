@@ -9,13 +9,7 @@
 
 #define LIVE_CHART_WIDTH 32
 
-struct live_stream_state {
-	uint64_t *previous;
-	uint64_t capture_overflow;
-	uint64_t interval_overflow;
-};
-
-struct live_window_stats {
+struct live_stats {
 	uint64_t count;
 	uint64_t min;
 	uint64_t p50;
@@ -25,13 +19,8 @@ struct live_window_stats {
 	char chart[LIVE_CHART_WIDTH + 1];
 };
 
-static uint64_t counter_delta(uint64_t current, uint64_t previous)
-{
-	return current >= previous ? current - previous : current;
-}
-
 static void build_chart(const uint64_t *delta, int max_bucket,
-			uint64_t overflow, struct live_window_stats *stats)
+			uint64_t overflow, struct live_stats *stats)
 {
 	static const char levels[] = " .:-=+*#@";
 	uint64_t columns[LIVE_CHART_WIDTH] = { 0 };
@@ -83,35 +72,30 @@ static void build_chart(const uint64_t *delta, int max_bucket,
 	stats->chart[LIVE_CHART_WIDTH] = '\0';
 }
 
-static void snapshot_window(const struct sv_histogram *histogram,
-			    uint64_t *previous, uint64_t *previous_overflow,
-			    uint64_t *delta, int threshold_us,
-			    struct live_window_stats *stats)
+static void snapshot_cumulative(const struct sv_histogram *histogram,
+				uint64_t *snapshot, int threshold_us,
+				struct live_stats *stats)
 {
 	memset(stats, 0, sizeof(*stats));
 	stats->min = (uint64_t)histogram->max_bucket_us + 1;
 
 	for (int i = 0; i <= histogram->max_bucket_us; i++) {
-		uint64_t current = atomic_load_explicit(&histogram->buckets[i],
-						memory_order_relaxed);
-		delta[i] = counter_delta(current, previous[i]);
-		previous[i] = current;
-		stats->count += delta[i];
-		if (delta[i] > 0) {
+		snapshot[i] = atomic_load_explicit(&histogram->buckets[i],
+						   memory_order_relaxed);
+		stats->count += snapshot[i];
+		if (snapshot[i] > 0) {
 			if ((uint64_t)i < stats->min)
 				stats->min = (uint64_t)i;
 			stats->max = (uint64_t)i;
 			if (i > threshold_us)
-				stats->above_threshold += delta[i];
+				stats->above_threshold += snapshot[i];
 		}
 	}
 
 	uint64_t overflow = atomic_load_explicit(&histogram->overflow,
 						 memory_order_relaxed);
-	uint64_t overflow_delta = counter_delta(overflow, *previous_overflow);
-	*previous_overflow = overflow;
-	stats->count += overflow_delta;
-	stats->above_threshold += overflow_delta;
+	stats->count += overflow;
+	stats->above_threshold += overflow;
 
 	if (stats->count == 0) {
 		memset(stats->chart, ' ', LIVE_CHART_WIDTH);
@@ -125,7 +109,7 @@ static void snapshot_window(const struct sv_histogram *histogram,
 	int p50_found = 0;
 	int p99_found = 0;
 	for (int i = 0; i <= histogram->max_bucket_us; i++) {
-		cumulative += delta[i];
+		cumulative += snapshot[i];
 		if (!p50_found && cumulative >= p50_rank) {
 			stats->p50 = (uint64_t)i;
 			p50_found = 1;
@@ -144,10 +128,9 @@ static void snapshot_window(const struct sv_histogram *histogram,
 		stats->p50 = overflow_value;
 	if (!p99_found)
 		stats->p99 = overflow_value;
-	if (overflow_delta > 0)
-		stats->max = overflow_value;
+	stats->max = histogram_max(histogram);
 
-	build_chart(delta, histogram->max_bucket_us, overflow_delta, stats);
+	build_chart(snapshot, histogram->max_bucket_us, overflow, stats);
 }
 
 static void format_value(char *buffer, size_t size, uint64_t value,
@@ -159,8 +142,8 @@ static void format_value(char *buffer, size_t size, uint64_t value,
 		snprintf(buffer, size, "%lu", (unsigned long)value);
 }
 
-static void print_window(const char *label, const struct live_window_stats *stats,
-			 int threshold_us, int max_bucket)
+static void print_stats(const char *label, const struct live_stats *stats,
+			int threshold_us, int max_bucket)
 {
 	if (stats->count == 0) {
 		fprintf(stderr, "  %-20s n=0 (waiting)\n", label);
@@ -171,7 +154,7 @@ static void print_window(const char *label, const struct live_window_stats *stat
 	format_value(min, sizeof(min), stats->min, max_bucket);
 	format_value(p50, sizeof(p50), stats->p50, max_bucket);
 	format_value(p99, sizeof(p99), stats->p99, max_bucket);
-	format_value(max, sizeof(max), stats->max, max_bucket);
+	snprintf(max, sizeof(max), "%lu", (unsigned long)stats->max);
 	double percent = 100.0 * (double)stats->above_threshold /
 			 (double)stats->count;
 
@@ -184,18 +167,16 @@ static void print_window(const char *label, const struct live_window_stats *stat
 }
 
 static void render_live_histograms(struct sv_live_histogram_ctx *ctx,
-				   struct live_stream_state *states,
-				   uint64_t *delta)
+				   uint64_t *snapshot)
 {
 	struct sv_stream_metrics *streams[SV_MAX_STREAMS];
-	int stream_indexes[SV_MAX_STREAMS];
 	int num_streams = 0;
 
 	pthread_mutex_lock(&ctx->metrics->stream_lock);
 	for (int i = 0; i < ctx->metrics->num_streams; i++) {
 		if (ctx->metrics->streams[i].active) {
 			streams[num_streams] = &ctx->metrics->streams[i];
-			stream_indexes[num_streams++] = i;
+			num_streams++;
 		}
 	}
 	pthread_mutex_unlock(&ctx->metrics->stream_lock);
@@ -203,43 +184,28 @@ static void render_live_histograms(struct sv_live_histogram_ctx *ctx,
 	flockfile(stderr);
 	if (isatty(STDERR_FILENO))
 		fputs("\033[H\033[2J", stderr);
-	fprintf(stderr, "SV live | window=1s | threshold >%dus\n",
+	fprintf(stderr, "SV live | since listening started | threshold >%dus\n",
 		ctx->threshold_us);
 
 	if (num_streams == 0)
 		fputs("Waiting for SV frames...\n", stderr);
 
 	for (int i = 0; i < num_streams; i++) {
-		struct live_stream_state *state = &states[stream_indexes[i]];
 		struct sv_stream_metrics *stream = streams[i];
-		if (!state->previous) {
-			state->previous = calloc(2U * SV_HISTOGRAM_BINS,
-						 sizeof(*state->previous));
-			if (!state->previous) {
-				fprintf(stderr,
-					"Stream appid=0x%04X svid=%s: allocation failed\n",
-					stream->id.app_id, stream->id.sv_id);
-				continue;
-			}
-		}
-
-		struct live_window_stats capture;
-		struct live_window_stats interval;
-		snapshot_window(&stream->capture_latency, state->previous,
-				&state->capture_overflow, delta,
-				ctx->threshold_us, &capture);
-		snapshot_window(&stream->interval_app,
-				state->previous + SV_HISTOGRAM_BINS,
-				&state->interval_overflow, delta,
-				ctx->threshold_us, &interval);
+		struct live_stats capture;
+		struct live_stats interval;
+		snapshot_cumulative(&stream->capture_latency, snapshot,
+				    ctx->threshold_us, &capture);
+		snapshot_cumulative(&stream->interval_app, snapshot,
+				    ctx->threshold_us, &interval);
 
 		fprintf(stderr, "Stream appid=0x%04X svid=%s\n",
 			stream->id.app_id, stream->id.sv_id);
-		print_window("HTS -> application", &capture, ctx->threshold_us,
-			     stream->capture_latency.max_bucket_us);
-		print_window("Application interval", &interval,
-			     ctx->threshold_us,
-			     stream->interval_app.max_bucket_us);
+		print_stats("HTS -> application", &capture, ctx->threshold_us,
+			    stream->capture_latency.max_bucket_us);
+		print_stats("Application interval", &interval,
+			    ctx->threshold_us,
+			    stream->interval_app.max_bucket_us);
 	}
 	funlockfile(stderr);
 	fflush(stderr);
@@ -248,12 +214,11 @@ static void render_live_histograms(struct sv_live_histogram_ctx *ctx,
 static void *live_histogram_thread(void *arg)
 {
 	struct sv_live_histogram_ctx *ctx = arg;
-	struct live_stream_state states[SV_MAX_STREAMS] = { 0 };
-	uint64_t *delta = calloc(SV_HISTOGRAM_BINS, sizeof(*delta));
+	uint64_t *snapshot = calloc(SV_HISTOGRAM_BINS, sizeof(*snapshot));
 	struct timespec next;
 
 	pthread_setname_np(pthread_self(), "sv-live-hist");
-	if (!delta)
+	if (!snapshot)
 		return NULL;
 	clock_gettime(CLOCK_MONOTONIC, &next);
 
@@ -267,12 +232,10 @@ static void *live_histogram_thread(void *arg)
 			 atomic_load_explicit(&ctx->running, memory_order_relaxed));
 		if (!atomic_load_explicit(&ctx->running, memory_order_relaxed))
 			break;
-		render_live_histograms(ctx, states, delta);
+		render_live_histograms(ctx, snapshot);
 	}
 
-	for (int i = 0; i < SV_MAX_STREAMS; i++)
-		free(states[i].previous);
-	free(delta);
+	free(snapshot);
 	return NULL;
 }
 
