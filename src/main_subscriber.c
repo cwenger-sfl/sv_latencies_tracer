@@ -79,6 +79,9 @@ static int run_direct(const struct sv_config *cfg)
 		return 1;
 	}
 
+	/* Keep monitoring and metrics threads off the real-time capture policy. */
+	apply_rt_settings(cfg);
+
 	fprintf(stderr, "sv-subscriber: direct mode on %s, metrics on :%u\n",
 		cfg->interface, cfg->prometheus_port);
 
@@ -186,6 +189,7 @@ static int run_split_subscriber(const struct sv_config *cfg)
 
 	int batch_idx = 0;
 	struct sv_captured_frame frame;
+	apply_rt_settings(cfg);
 
 	while (g_running) {
 		if (capture_recv(&capture, &frame) < 0) {
@@ -269,8 +273,6 @@ int main(int argc, char **argv)
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
-
-	apply_rt_settings(&cfg);
 
 	if (cfg.mode == SV_MODE_DIRECT)
 		return run_direct(&cfg);
