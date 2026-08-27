@@ -61,13 +61,56 @@ int capture_discover_phc(const char *ifname, char *buf, size_t buflen)
 	return 0;
 }
 
+static void restore_device_hwtstamp(struct sv_capture_ctx *ctx)
+{
+	if (!ctx->restore_hwtstamp_config || ctx->sock_fd < 0)
+		return;
+
+	struct hwtstamp_config current = { 0 };
+	struct ifreq ifr;
+	memset(&ifr, 0, sizeof(ifr));
+	memcpy(ifr.ifr_name, ctx->ifname, sizeof(ifr.ifr_name));
+	ifr.ifr_data = (void *)&current;
+	if (ioctl(ctx->sock_fd, SIOCGHWTSTAMP, &ifr) < 0) {
+		perror("capture: verify SIOCGHWTSTAMP before restoring");
+		ctx->restore_hwtstamp_config = false;
+		return;
+	}
+	if (current.tx_type != ctx->configured_hwtstamp_tx_type ||
+	    current.rx_filter != ctx->configured_hwtstamp_rx_filter) {
+		fprintf(stderr,
+			"capture: '%s' device timestamp config changed externally; "
+			"not restoring it\n", ctx->ifname);
+		ctx->restore_hwtstamp_config = false;
+		return;
+	}
+
+	struct hwtstamp_config hwcfg = {
+		.flags = ctx->saved_hwtstamp_flags,
+		.tx_type = ctx->saved_hwtstamp_tx_type,
+		.rx_filter = ctx->saved_hwtstamp_rx_filter,
+	};
+	ifr.ifr_data = (void *)&hwcfg;
+	if (ioctl(ctx->sock_fd, SIOCSHWTSTAMP, &ifr) < 0) {
+		perror("capture: restore SIOCSHWTSTAMP");
+	} else {
+		fprintf(stderr,
+			"capture: restored '%s' device timestamp config "
+			"(tx_type=%d, rx_filter=%d)\n",
+			ctx->ifname, hwcfg.tx_type, hwcfg.rx_filter);
+	}
+	ctx->restore_hwtstamp_config = false;
+}
+
 int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
-		 const char *phc_path, int vlan_id)
+		 const char *phc_path, int vlan_id,
+		 bool enable_hw_timestamps)
 {
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->sock_fd = -1;
 	ctx->phc_fd = -1;
 	ctx->phc_clockid = CLOCK_REALTIME;
+	snprintf(ctx->ifname, sizeof(ctx->ifname), "%s", ifname);
 
 	ctx->if_index = (int)if_nametoindex(ifname);
 	if (ctx->if_index == 0) {
@@ -153,7 +196,30 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 			"capture: preserving '%s' device timestamp config "
 			"(tx_type=%d, rx_filter=%d)\n",
 			ifname, hwcfg.tx_type, hwcfg.rx_filter);
+		if (enable_hw_timestamps &&
+		    hwcfg.rx_filter != HWTSTAMP_FILTER_ALL) {
+			ctx->saved_hwtstamp_flags = hwcfg.flags;
+			ctx->saved_hwtstamp_tx_type = hwcfg.tx_type;
+			ctx->saved_hwtstamp_rx_filter = hwcfg.rx_filter;
+			hwcfg.flags = 0;
+			hwcfg.rx_filter = HWTSTAMP_FILTER_ALL;
+			if (ioctl(ctx->sock_fd, SIOCSHWTSTAMP, &ifr) < 0) {
+				perror("capture: enable SIOCSHWTSTAMP");
+				goto err;
+			}
+			ctx->restore_hwtstamp_config = true;
+			ctx->configured_hwtstamp_tx_type = hwcfg.tx_type;
+			ctx->configured_hwtstamp_rx_filter = hwcfg.rx_filter;
+			fprintf(stderr,
+				"capture: enabled all-frame hardware RX timestamps "
+				"on '%s' (tx_type=%d, rx_filter=%d)\n",
+				ifname, hwcfg.tx_type, hwcfg.rx_filter);
+		}
 	} else {
+		if (enable_hw_timestamps) {
+			perror("capture: read SIOCGHWTSTAMP before enabling");
+			goto err;
+		}
 		fprintf(stderr,
 			"capture: device timestamp config for '%s' is unavailable; "
 			"leaving it unchanged\n", ifname);
@@ -208,6 +274,7 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 	return 0;
 
 err:
+	restore_device_hwtstamp(ctx);
 	close(ctx->sock_fd);
 	ctx->sock_fd = -1;
 	if (ctx->phc_fd >= 0) {
@@ -326,6 +393,7 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 void capture_close(struct sv_capture_ctx *ctx)
 {
 	if (ctx->sock_fd >= 0) {
+		restore_device_hwtstamp(ctx);
 		if (ctx->promisc_enabled) {
 			struct packet_mreq promisc = {
 				.mr_ifindex = ctx->if_index,

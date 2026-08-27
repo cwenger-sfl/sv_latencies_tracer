@@ -149,7 +149,8 @@ static int run_direct(const struct sv_config *cfg)
 	drop_tracker_init(&drops);
 
 	const char *phc = cfg->phc_device_set ? cfg->phc_device : NULL;
-	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id) < 0) {
+	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id,
+			 cfg->enable_hw_timestamps) < 0) {
 		close_output_file(output);
 		return 1;
 	}
@@ -304,7 +305,8 @@ static int run_split_subscriber(const struct sv_config *cfg)
 	drop_tracker_init(&drops);
 
 	const char *phc = cfg->phc_device_set ? cfg->phc_device : NULL;
-	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id) < 0)
+	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id,
+			 cfg->enable_hw_timestamps) < 0)
 		return 1;
 
 	/* Connect to collector */

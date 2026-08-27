@@ -57,12 +57,27 @@ static void test_warmup_options(void)
 	assert(cfg.warmup_seconds == 1);
 }
 
+static void test_enable_hw_timestamp_option(void)
+{
+	struct sv_config cfg;
+	char *argv[] = {
+		"sv-subscriber",
+		"--enable-hw-timestamps",
+	};
+
+	config_set_defaults(&cfg);
+	assert(cfg.enable_hw_timestamps == 0);
+	assert(config_parse_args(&cfg, 2, argv) == 0);
+	assert(cfg.enable_hw_timestamps == 1);
+}
+
 int main(void)
 {
 	printf("=== Config Tests ===\n");
 	test_live_histogram_options();
 	test_output_options();
 	test_warmup_options();
+	test_enable_hw_timestamp_option();
 	printf("All config tests passed.\n");
 	return 0;
 }

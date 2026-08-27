@@ -26,6 +26,7 @@ void config_set_defaults(struct sv_config *cfg)
 	memset(cfg, 0, sizeof(*cfg));
 	strncpy(cfg->interface, "eth0", sizeof(cfg->interface) - 1);
 	cfg->phc_device_set = 0;
+	cfg->enable_hw_timestamps = 0;
 	cfg->vlan_id = -1;
 	cfg->mode = SV_MODE_DIRECT;
 	cfg->role = SV_ROLE_SUBSCRIBER;
@@ -53,6 +54,7 @@ void config_print_usage(const char *progname)
 		"Options:\n"
 		"  -i, --interface NAME      Network interface (default: eth0)\n"
 		"  -p, --phc-device PATH     PHC device path (auto-detected if unset)\n"
+		"  -E, --enable-hw-timestamps Configure device RX timestamp filter to all\n"
 		"  -v, --vlan-id ID          VLAN ID filter (default: accept all)\n"
 		"  -m, --mode MODE           'direct' or 'split' (default: direct)\n"
 		"  -c, --collector ADDR:PORT Collector address (default: 127.0.0.1:9200)\n"
@@ -75,6 +77,7 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 	static const struct option long_opts[] = {
 		{"interface",      required_argument, NULL, 'i'},
 		{"phc-device",     required_argument, NULL, 'p'},
+		{"enable-hw-timestamps", no_argument, NULL, 'E'},
 		{"vlan-id",        required_argument, NULL, 'v'},
 		{"mode",           required_argument, NULL, 'm'},
 		{"collector",      required_argument, NULL, 'c'},
@@ -95,7 +98,7 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 	/* Allow callers and unit tests to parse more than one argument vector. */
 	optind = 1;
 	int opt;
-	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:No:H:b:a:s:LT:w:h",
+	while ((opt = getopt_long(argc, argv, "i:p:Ev:m:c:P:No:H:b:a:s:LT:w:h",
 				  long_opts, NULL)) != -1) {
 		switch (opt) {
 		case 'i':
@@ -106,6 +109,9 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 			strncpy(cfg->phc_device, optarg,
 				sizeof(cfg->phc_device) - 1);
 			cfg->phc_device_set = 1;
+			break;
+		case 'E':
+			cfg->enable_hw_timestamps = 1;
 			break;
 		case 'v':
 			if (parse_int(optarg, -1, 4095, &cfg->vlan_id) < 0) {

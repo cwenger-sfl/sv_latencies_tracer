@@ -42,7 +42,8 @@ int main(int argc, char **argv)
 
 	struct sv_capture_ctx capture;
 	const char *phc = cfg.phc_device_set ? cfg.phc_device : NULL;
-	if (capture_open(&capture, cfg.interface, phc, cfg.vlan_id) < 0)
+	if (capture_open(&capture, cfg.interface, phc, cfg.vlan_id,
+			 cfg.enable_hw_timestamps) < 0)
 		return 1;
 
 	/* Connect to collector */

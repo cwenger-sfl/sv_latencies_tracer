@@ -19,6 +19,7 @@ struct sv_config {
 	char     interface[64];
 	char     phc_device[64];
 	int      phc_device_set;
+	int      enable_hw_timestamps;
 	int      vlan_id;         /* -1 = accept all */
 	enum sv_mode mode;
 	enum sv_role role;

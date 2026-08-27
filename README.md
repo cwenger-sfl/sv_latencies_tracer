@@ -94,6 +94,7 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 |------|------|-------------|---------|
 | `-i` | `--interface` | Network interface | `eth0` |
 | `-p` | `--phc-device` | PHC device path | auto-detected |
+| `-E` | `--enable-hw-timestamps` | Configure hardware RX timestamps for all frames | disabled |
 | `-v` | `--vlan-id` | VLAN ID filter | accept all |
 | `-m` | `--mode` | `direct` or `split` | `direct` |
 | `-c` | `--collector` | Collector `ADDR:PORT` | `127.0.0.1:9200` |
@@ -142,12 +143,19 @@ where each elapsed duration is calculated within its own clock domain. The PHC
 read happens immediately before the realtime read; the estimate can therefore
 be lower by the small time between those two reads.
 
-The tracer does not call `SIOCSHWTSTAMP`: that configuration is global to the
-network device and may be owned by `ptp4l` or another process. It requests both
-timestamp types from its socket, uses a hardware timestamp when the driver
-provides one and its PHC is available, and otherwise uses the software receive
-timestamp. Check `sv_timestamp_source_frames_total` before interpreting a
-latency histogram.
+By default, the tracer does not call `SIOCSHWTSTAMP`: that configuration is
+global to the network device and may be owned by `ptp4l` or another process. It
+requests both timestamp types from its socket, uses a hardware timestamp when
+the driver provides one and its PHC is available, and otherwise uses the
+software receive timestamp. Check `sv_timestamp_source_frames_total` before
+interpreting a latency histogram.
+
+For controlled hardware-timestamp tests without an external `hwstamp_ctl`
+command, pass `--enable-hw-timestamps`. The tracer then requests
+`HWTSTAMP_FILTER_ALL` while preserving the current TX timestamp mode, and
+restores the previous device configuration on normal exit. This setting is
+device-global and can interfere with `ptp4l`; it is therefore disabled by
+default and cannot be restored after `SIGKILL` or a process crash.
 
 ## Prometheus Metrics
 
