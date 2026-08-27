@@ -38,6 +38,8 @@ Exposed by `sv-subscriber` on `/metrics`:
 | Metric                       | Type      | Description                                  |
 |------------------------------|-----------|----------------------------------------------|
 | `sv_capture_latency_us`      | histogram | NIC HW TS to app delivery (µs)               |
+| `sv_capture_latency_us_max`  | gauge     | Maximum NIC HW TS to app latency since start  |
+| `sv_capture_latency_us_observations_total` | counter | Count per exact observed latency (µs), including values above 35000 |
 | `sv_parsed_latency_us`       | histogram | NIC HW TS to post-parse (µs)                 |
 | `sv_sv_interval_hw_us`       | histogram | Interval between frames (HW timestamp, µs)   |
 | `sv_sv_interval_app_us`      | histogram | Interval between frames (app timestamp, µs)  |
@@ -55,6 +57,12 @@ Histograms carry `appid` and `svid` labels and are displayed via `histogram_quan
 
 - `histogram_quantile(0.99, sum by (le, appid, svid) (rate(sv_capture_latency_us_bucket[5m])))`
   -- NIC-to-application p99 latency
+- `max(sv_capture_latency_us_max) / 1000`
+  -- maximum exact NIC-to-application latency since each tracer started
+- `histogram_quantile(1, sum by (le, appid, svid) (increase(sv_capture_latency_us_bucket[10s]))) / 1000`
+  -- maximum NIC-to-application latency during the previous 10 seconds
+- `sum by (latency_us) (sv_capture_latency_us_observations_total)`
+  -- exact latency distribution since each tracer started
 - `histogram_quantile(0.99, sum by (le, appid, svid) (rate(sv_parsed_latency_us_bucket[5m])))`
   -- NIC-to-parsed p99 latency
 - `rate(sv_frames_total[5m])` -- frame rate

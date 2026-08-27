@@ -7,7 +7,7 @@ IEC 61850 Sample Values (SV) latency measurement tool for the [SEAPATH](https://
 - Hardware timestamp capture via `AF_PACKET` + `SO_TIMESTAMPING`
 - PHC (PTP Hardware Clock) auto-discovery per interface
 - Minimal BER/ASN.1 SV parser (no libiec61850 dependency)
-- Lock-free latency histograms (1 µs resolution, 0-500 µs)
+- Lock-free latency histograms (1 µs resolution, 0-35000 µs)
 - Per-stream sample count drop detection with 16-bit wrap-around
 - Prometheus `/metrics` endpoint (embedded HTTP server)
 - System health monitoring (link state, kernel oops, RT throttling)
@@ -85,7 +85,7 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 | `-m` | `--mode` | `direct` or `split` | `direct` |
 | `-c` | `--collector` | Collector `ADDR:PORT` | `127.0.0.1:9200` |
 | `-P` | `--prometheus-port` | Metrics HTTP port | `9100` |
-| `-H` | `--histogram-max` | Max histogram bucket (µs) | `500` |
+| `-H` | `--histogram-max` | Max histogram bucket (µs) | `35000` |
 | `-b` | `--batch-size` | Batch size (split mode) | `256` |
 | `-a` | `--cpu-affinity` | Pin capture thread to CPU | unset |
 | `-s` | `--sched-fifo` | SCHED_FIFO priority | disabled |
@@ -95,6 +95,8 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 | Metric | Type | Description |
 |--------|------|-------------|
 | `sv_capture_latency_us` | histogram | NIC HW timestamp to application delivery (µs) |
+| `sv_capture_latency_us_max` | gauge | Maximum NIC-to-application latency since start (µs) |
+| `sv_capture_latency_us_observations_total` | counter | Count of each exact observed latency (µs), including values above 35000 |
 | `sv_parsed_latency_us` | histogram | NIC HW timestamp to post-parse (µs) |
 | `sv_frames_total` | counter | Total SV frames received per stream |
 | `sv_drops_total` | counter | Dropped SV frames per stream (smpCnt gaps) |
