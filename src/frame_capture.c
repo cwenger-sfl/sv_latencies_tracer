@@ -22,33 +22,18 @@
  *
  * Equivalent tcpdump filter: "ether proto 0x88ba"
  */
-static struct sock_filter sv_bpf_filter[] = {
-	/* Load half-word at offset 12 (EtherType) */
-	BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 12),
-	/* If 0x88BA, accept */
-	BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SV_ETHERTYPE, 3, 0),
-	/* If 0x8100 (VLAN), check inner EtherType */
-	BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, VLAN_ETHERTYPE, 0, 3),
-	BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 16),
-	BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SV_ETHERTYPE, 0, 1),
-	/* Accept */
-	BPF_STMT(BPF_RET | BPF_K, (uint32_t)-1),
-	/* Reject */
-	BPF_STMT(BPF_RET | BPF_K, 0),
-};
-
-static clockid_t phc_path_to_clockid(const char *phc_path)
+static int phc_path_to_clockid(const char *phc_path, clockid_t *clock_id)
 {
 	int fd = open(phc_path, O_RDONLY);
 	if (fd < 0)
-		return CLOCK_REALTIME;
+		return -1;
 
 	/* FD-based clockid: ~fd << 3 | 3 */
-	clockid_t clkid = (~(clockid_t)fd << 3) | 3;
+	*clock_id = (~(clockid_t)fd << 3) | 3;
 
 	/* We intentionally do NOT close fd — it must remain open for
 	 * clock_gettime() to work with this clockid. */
-	return clkid;
+	return fd;
 }
 
 int capture_discover_phc(const char *ifname, char *buf, size_t buflen)
@@ -77,10 +62,12 @@ int capture_discover_phc(const char *ifname, char *buf, size_t buflen)
 }
 
 int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
-		 const char *phc_path)
+		 const char *phc_path, int vlan_id)
 {
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->sock_fd = -1;
+	ctx->phc_fd = -1;
+	ctx->phc_clockid = CLOCK_REALTIME;
 
 	ctx->if_index = (int)if_nametoindex(ifname);
 	if (ctx->if_index == 0) {
@@ -105,10 +92,49 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 		goto err;
 	}
 
-	/* Attach BPF filter */
+	/*
+	 * SV frames are commonly sent to a multicast MAC address.  tcpdump
+	 * enables promiscuous mode by default, but an AF_PACKET socket does not.
+	 * Use a socket-scoped membership so multicast SV frames reach us without
+	 * changing the interface flags for other users.
+	 */
+	struct packet_mreq promisc = {
+		.mr_ifindex = ctx->if_index,
+		.mr_type = PACKET_MR_PROMISC,
+	};
+	if (setsockopt(ctx->sock_fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP,
+		       &promisc, sizeof(promisc)) < 0) {
+		perror("capture: PACKET_ADD_MEMBERSHIP(PACKET_MR_PROMISC)");
+		goto err;
+	}
+	ctx->promisc_enabled = true;
+
+	/* Attach a filter for SV, optionally restricted to one VLAN. */
+	struct sock_filter all_vlans[] = {
+		BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 12),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SV_ETHERTYPE, 3, 0),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, VLAN_ETHERTYPE, 0, 3),
+		BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 16),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SV_ETHERTYPE, 0, 1),
+		BPF_STMT(BPF_RET | BPF_K, (uint32_t)-1),
+		BPF_STMT(BPF_RET | BPF_K, 0),
+	};
+	struct sock_filter one_vlan[] = {
+		BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 12),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, VLAN_ETHERTYPE, 0, 6),
+		BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 14),
+		BPF_STMT(BPF_ALU | BPF_AND | BPF_K, 0x0FFF),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)vlan_id, 0, 3),
+		BPF_STMT(BPF_LD | BPF_H | BPF_ABS, 16),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SV_ETHERTYPE, 0, 1),
+		BPF_STMT(BPF_RET | BPF_K, (uint32_t)-1),
+		BPF_STMT(BPF_RET | BPF_K, 0),
+	};
+	struct sock_filter *filter = vlan_id < 0 ? all_vlans : one_vlan;
 	struct sock_fprog bpf = {
-		.len = sizeof(sv_bpf_filter) / sizeof(sv_bpf_filter[0]),
-		.filter = sv_bpf_filter,
+		.len = vlan_id < 0 ? sizeof(all_vlans) / sizeof(all_vlans[0])
+				   : sizeof(one_vlan) / sizeof(one_vlan[0]),
+		.filter = filter,
 	};
 	if (setsockopt(ctx->sock_fd, SOL_SOCKET, SO_ATTACH_FILTER,
 		       &bpf, sizeof(bpf)) < 0) {
@@ -150,13 +176,21 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 
 	/* Set up PHC clock */
 	if (phc_path) {
-		ctx->phc_clockid = phc_path_to_clockid(phc_path);
+		ctx->phc_fd = phc_path_to_clockid(phc_path, &ctx->phc_clockid);
+		if (ctx->phc_fd < 0) {
+			fprintf(stderr, "capture: cannot open PHC '%s', using CLOCK_REALTIME\n",
+				phc_path);
+			ctx->phc_clockid = CLOCK_REALTIME;
+		}
 	} else if (ctx->hw_timestamping) {
 		/* Try auto-detection only when HW timestamping is active */
 		char auto_path[64];
 		if (capture_discover_phc(ifname, auto_path,
 					 sizeof(auto_path)) == 0) {
-			ctx->phc_clockid = phc_path_to_clockid(auto_path);
+			ctx->phc_fd = phc_path_to_clockid(auto_path,
+							  &ctx->phc_clockid);
+			if (ctx->phc_fd < 0)
+				ctx->phc_clockid = CLOCK_REALTIME;
 		} else {
 			fprintf(stderr,
 				"capture: WARNING: could not discover PHC for "
@@ -173,6 +207,10 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 err:
 	close(ctx->sock_fd);
 	ctx->sock_fd = -1;
+	if (ctx->phc_fd >= 0) {
+		close(ctx->phc_fd);
+		ctx->phc_fd = -1;
+	}
 	return -1;
 }
 
@@ -197,19 +235,19 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 	if (n < 0)
 		return -1;
 
-	/* Record application timestamp immediately */
-	struct timespec app_now;
-	clock_gettime(ctx->phc_clockid, &app_now);
-	frame->app_ts = timespec_to_svts(&app_now);
-
 	frame->len = (size_t)n;
 
-	/* Extract hardware timestamp from cmsg */
-	frame->hw_ts = (struct sv_timestamp){0, 0};
+	/* Extract timestamps from cmsg. */
+	struct sv_timestamp hw_ts = {0, 0};
+	struct sv_timestamp sw_ts = {0, 0};
+	int have_hw_ts = 0;
+	int have_sw_ts = 0;
 	for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm;
 	     cm = CMSG_NXTHDR(&msg, cm)) {
 		if (cm->cmsg_level == SOL_SOCKET &&
 		    cm->cmsg_type == SO_TIMESTAMPING) {
+			if (cm->cmsg_len < CMSG_LEN(3 * sizeof(struct timespec)))
+				continue;
 			struct timespec *stamps = (struct timespec *)CMSG_DATA(cm);
 			/*
 			 * stamps[0] = software timestamp
@@ -217,18 +255,31 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 			 * stamps[2] = hardware timestamp
 			 */
 			if (stamps[2].tv_sec != 0 || stamps[2].tv_nsec != 0) {
-				frame->hw_ts = timespec_to_svts(&stamps[2]);
-			} else if (stamps[0].tv_sec != 0 ||
-				   stamps[0].tv_nsec != 0) {
-				/* Fallback to software timestamp */
-				frame->hw_ts = timespec_to_svts(&stamps[0]);
+				hw_ts = timespec_to_svts(&stamps[2]);
+				have_hw_ts = 1;
+			}
+			if (stamps[0].tv_sec != 0 || stamps[0].tv_nsec != 0) {
+				sw_ts = timespec_to_svts(&stamps[0]);
+				have_sw_ts = 1;
 			}
 			break;
 		}
 	}
 
-	/* If no timestamp from cmsg, use app timestamp as fallback */
-	if (frame->hw_ts.sec == 0 && frame->hw_ts.nsec == 0)
+	/* A hardware timestamp is comparable only when its PHC is available. */
+	int use_hw_ts = have_hw_ts && ctx->phc_fd >= 0;
+	int use_sw_ts = !use_hw_ts && have_sw_ts;
+	clockid_t app_clock = use_hw_ts ? ctx->phc_clockid : CLOCK_REALTIME;
+	struct timespec app_now;
+	if (clock_gettime(app_clock, &app_now) < 0)
+		return -1;
+	frame->app_ts = timespec_to_svts(&app_now);
+	frame->timestamp_clockid = app_clock;
+	if (use_hw_ts)
+		frame->hw_ts = hw_ts;
+	else if (use_sw_ts)
+		frame->hw_ts = sw_ts;
+	else
 		frame->hw_ts = frame->app_ts;
 
 	return 0;
@@ -237,7 +288,22 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 void capture_close(struct sv_capture_ctx *ctx)
 {
 	if (ctx->sock_fd >= 0) {
+		if (ctx->promisc_enabled) {
+			struct packet_mreq promisc = {
+				.mr_ifindex = ctx->if_index,
+				.mr_type = PACKET_MR_PROMISC,
+			};
+			if (setsockopt(ctx->sock_fd, SOL_PACKET,
+				       PACKET_DROP_MEMBERSHIP,
+				       &promisc, sizeof(promisc)) < 0 && errno != ENODEV)
+				perror("capture: PACKET_DROP_MEMBERSHIP(PACKET_MR_PROMISC)");
+			ctx->promisc_enabled = false;
+		}
 		close(ctx->sock_fd);
 		ctx->sock_fd = -1;
+	}
+	if (ctx->phc_fd >= 0) {
+		close(ctx->phc_fd);
+		ctx->phc_fd = -1;
 	}
 }

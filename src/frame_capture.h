@@ -5,13 +5,15 @@
 #include <stdbool.h>
 #include "common.h"
 
-#define SV_FRAME_MAX_LEN 1518
+#define SV_FRAME_MAX_LEN 1522
 
 struct sv_capture_ctx {
 	int sock_fd;
+	int phc_fd;
 	int if_index;
 	clockid_t phc_clockid;
 	bool hw_timestamping;  /* true if NIC HW timestamping is active */
+	bool promisc_enabled;  /* true while this socket owns a promisc membership */
 };
 
 struct sv_captured_frame {
@@ -19,6 +21,7 @@ struct sv_captured_frame {
 	size_t             len;
 	struct sv_timestamp hw_ts;     /* NIC hardware timestamp */
 	struct sv_timestamp app_ts;    /* Application timestamp (right after recvmsg) */
+	clockid_t          timestamp_clockid; /* Clock used for app_ts and parsed_ts */
 };
 
 /*
@@ -31,7 +34,7 @@ struct sv_captured_frame {
  * @return 0 on success, -1 on error.
  */
 int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
-		 const char *phc_path);
+		     const char *phc_path, int vlan_id);
 
 /*
  * Receive one SV frame with timestamps.

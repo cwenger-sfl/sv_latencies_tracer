@@ -61,11 +61,11 @@ static int run_direct(const struct sv_config *cfg)
 	struct sv_drop_tracker drops;
 	struct sv_sysmon_ctx sysmon;
 
-	metrics_init(&metrics);
+	metrics_init_with_max(&metrics, cfg->histogram_max_us);
 	drop_tracker_init(&drops);
 
 	const char *phc = cfg->phc_device_set ? cfg->phc_device : NULL;
-	if (capture_open(&capture, cfg->interface, phc) < 0)
+	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id) < 0)
 		return 1;
 
 	if (metrics_server_start(cfg->prometheus_port, &metrics, &drops) < 0) {
@@ -73,7 +73,11 @@ static int run_direct(const struct sv_config *cfg)
 		return 1;
 	}
 
-	sysmon_start(&sysmon, &metrics, cfg->interface);
+	if (sysmon_start(&sysmon, &metrics, cfg->interface) < 0) {
+		metrics_server_stop();
+		capture_close(&capture);
+		return 1;
+	}
 
 	fprintf(stderr, "sv-subscriber: direct mode on %s, metrics on :%u\n",
 		cfg->interface, cfg->prometheus_port);
@@ -93,7 +97,10 @@ static int run_direct(const struct sv_config *cfg)
 
 		/* Record T_parsed */
 		struct timespec parsed_now;
-		clock_gettime(capture.phc_clockid, &parsed_now);
+		if (clock_gettime(frame.timestamp_clockid, &parsed_now) < 0) {
+			perror("clock_gettime parsed timestamp");
+			break;
+		}
 		struct sv_timestamp parsed_ts = timespec_to_svts(&parsed_now);
 
 		/* Compute deltas */
@@ -113,7 +120,7 @@ static int run_direct(const struct sv_config *cfg)
 					&frame.app_ts);
 
 		/* Track drops */
-		drop_tracker_process(&drops, &info);
+		drop_tracker_process_at(&drops, &info, &frame.app_ts);
 	}
 
 	fprintf(stderr, "\nShutting down...\n");
@@ -130,11 +137,12 @@ static int run_split_subscriber(const struct sv_config *cfg)
 {
 	struct sv_capture_ctx capture;
 	struct sv_drop_tracker drops;
+	int status = 0;
 
 	drop_tracker_init(&drops);
 
 	const char *phc = cfg->phc_device_set ? cfg->phc_device : NULL;
-	if (capture_open(&capture, cfg->interface, phc) < 0)
+	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id) < 0)
 		return 1;
 
 	/* Connect to collector */
@@ -191,10 +199,13 @@ static int run_split_subscriber(const struct sv_config *cfg)
 			continue;
 
 		struct timespec parsed_now;
-		clock_gettime(capture.phc_clockid, &parsed_now);
+		if (clock_gettime(frame.timestamp_clockid, &parsed_now) < 0) {
+			perror("clock_gettime parsed timestamp");
+			break;
+		}
 		struct sv_timestamp parsed_ts = timespec_to_svts(&parsed_now);
 
-		drop_tracker_process(&drops, &info);
+		drop_tracker_process_at(&drops, &info, &frame.app_ts);
 
 		struct proto_subscriber_record *r = &batch[batch_idx];
 		r->app_id = info.app_id;
@@ -209,7 +220,13 @@ static int run_split_subscriber(const struct sv_config *cfg)
 			ssize_t len = proto_serialize_subscriber_batch(
 				batch, batch_idx, &buf);
 			if (len > 0) {
-				proto_send_batch(sock, buf, (size_t)len);
+				if (proto_send_batch(sock, buf, (size_t)len) < 0) {
+					perror("send batch to collector");
+					free(buf);
+					batch_idx = 0;
+					status = 1;
+					break;
+				}
 				free(buf);
 			}
 			batch_idx = 0;
@@ -222,7 +239,10 @@ static int run_split_subscriber(const struct sv_config *cfg)
 		ssize_t len = proto_serialize_subscriber_batch(
 			batch, batch_idx, &buf);
 		if (len > 0) {
-			proto_send_batch(sock, buf, (size_t)len);
+			if (proto_send_batch(sock, buf, (size_t)len) < 0) {
+				perror("send final batch to collector");
+				status = 1;
+			}
 			free(buf);
 		}
 	}
@@ -230,7 +250,7 @@ static int run_split_subscriber(const struct sv_config *cfg)
 	free(batch);
 	close(sock);
 	capture_close(&capture);
-	return 0;
+	return status;
 }
 
 int main(int argc, char **argv)
