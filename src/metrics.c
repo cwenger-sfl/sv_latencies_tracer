@@ -284,6 +284,8 @@ fail:
 char *metrics_format(const struct sv_metrics_state *ms,
 		     const struct sv_drop_tracker *dt)
 {
+	const struct sv_stream_metrics *streams[SV_MAX_STREAMS];
+	int num_streams = 0;
 	size_t cap = 65536;
 	size_t pos = 0;
 	char *buf = malloc(cap);
@@ -292,13 +294,21 @@ char *metrics_format(const struct sv_metrics_state *ms,
 		return NULL;
 	buf[0] = '\0';
 
+	/*
+	 * Stream entries are immutable after publication and are never removed.
+	 * Do not hold this lock while snapshotting the large atomic histograms:
+	 * the capture path takes it once per received frame.
+	 */
 	pthread_mutex_lock((pthread_mutex_t *)&ms->stream_lock);
-	/* Per-stream histograms and counters */
 	for (int i = 0; i < ms->num_streams; i++) {
-		const struct sv_stream_metrics *s = &ms->streams[i];
-		if (!s->active)
-			continue;
+		if (ms->streams[i].active)
+			streams[num_streams++] = &ms->streams[i];
+	}
+	pthread_mutex_unlock((pthread_mutex_t *)&ms->stream_lock);
 
+	/* Per-stream histograms and counters */
+	for (int i = 0; i < num_streams; i++) {
+		const struct sv_stream_metrics *s = streams[i];
 		uint16_t aid = s->id.app_id;
 		const char *sid = s->id.sv_id;
 
@@ -455,13 +465,11 @@ char *metrics_format(const struct sv_metrics_state *ms,
 	if (n > 0)
 		pos += (size_t)n;
 
-	pthread_mutex_unlock((pthread_mutex_t *)&ms->stream_lock);
 	return buf;
 
 fail:
 	if (dt_locked)
 		pthread_mutex_unlock((pthread_mutex_t *)&dt->lock);
-	pthread_mutex_unlock((pthread_mutex_t *)&ms->stream_lock);
 	free(buf);
 	return NULL;
 }
