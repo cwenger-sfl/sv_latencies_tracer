@@ -142,36 +142,39 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 		goto err;
 	}
 
-	/* Try to enable HW timestamping on the NIC via ioctl */
+	/* SIOCSHWTSTAMP is device-global, so preserve its external owner. */
 	struct ifreq ifr;
 	memset(&ifr, 0, sizeof(ifr));
 	strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-	struct hwtstamp_config hwcfg = {
-		.tx_type = HWTSTAMP_TX_OFF,
-		.rx_filter = HWTSTAMP_FILTER_ALL,
-	};
+	struct hwtstamp_config hwcfg = { 0 };
 	ifr.ifr_data = (void *)&hwcfg;
-	ctx->hw_timestamping = (ioctl(ctx->sock_fd, SIOCSHWTSTAMP, &ifr) == 0);
-
-	int ts_flags;
-	if (ctx->hw_timestamping) {
-		ts_flags = SOF_TIMESTAMPING_RAW_HARDWARE |
-			   SOF_TIMESTAMPING_RX_HARDWARE |
-			   SOF_TIMESTAMPING_SOFTWARE |
-			   SOF_TIMESTAMPING_RX_SOFTWARE;
+	if (ioctl(ctx->sock_fd, SIOCGHWTSTAMP, &ifr) == 0) {
+		fprintf(stderr,
+			"capture: preserving '%s' device timestamp config "
+			"(tx_type=%d, rx_filter=%d)\n",
+			ifname, hwcfg.tx_type, hwcfg.rx_filter);
 	} else {
 		fprintf(stderr,
-			"capture: WARNING: hardware timestamping not available "
-			"on '%s', falling back to software timestamping\n",
-			ifname);
-		ts_flags = SOF_TIMESTAMPING_SOFTWARE |
-			   SOF_TIMESTAMPING_RX_SOFTWARE;
+			"capture: device timestamp config for '%s' is unavailable; "
+			"leaving it unchanged\n", ifname);
 	}
 
+	int ts_flags = SOF_TIMESTAMPING_RAW_HARDWARE |
+		       SOF_TIMESTAMPING_RX_HARDWARE |
+		       SOF_TIMESTAMPING_SOFTWARE |
+		       SOF_TIMESTAMPING_RX_SOFTWARE;
 	if (setsockopt(ctx->sock_fd, SOL_SOCKET, SO_TIMESTAMPING,
 		       &ts_flags, sizeof(ts_flags)) < 0) {
-		perror("capture: SO_TIMESTAMPING");
-		/* Non-fatal — timestamps may still be available */
+		fprintf(stderr,
+			"capture: hardware timestamp requests unavailable on '%s'; "
+			"requesting software timestamps only\n", ifname);
+		ts_flags = SOF_TIMESTAMPING_SOFTWARE |
+			   SOF_TIMESTAMPING_RX_SOFTWARE;
+		if (setsockopt(ctx->sock_fd, SOL_SOCKET, SO_TIMESTAMPING,
+			       &ts_flags, sizeof(ts_flags)) < 0)
+			perror("capture: SO_TIMESTAMPING");
+	} else {
+		ctx->hw_timestamps_requested = true;
 	}
 
 	/* Set up PHC clock */
@@ -182,8 +185,8 @@ int capture_open(struct sv_capture_ctx *ctx, const char *ifname,
 				phc_path);
 			ctx->phc_clockid = CLOCK_REALTIME;
 		}
-	} else if (ctx->hw_timestamping) {
-		/* Try auto-detection only when HW timestamping is active */
+	} else if (ctx->hw_timestamps_requested) {
+		/* A PHC is needed only if the socket receives hardware timestamps. */
 		char auto_path[64];
 		if (capture_discover_phc(ifname, auto_path,
 					 sizeof(auto_path)) == 0) {
@@ -275,12 +278,16 @@ int capture_recv(struct sv_capture_ctx *ctx, struct sv_captured_frame *frame)
 		return -1;
 	frame->app_ts = timespec_to_svts(&app_now);
 	frame->timestamp_clockid = app_clock;
-	if (use_hw_ts)
-		frame->hw_ts = hw_ts;
-	else if (use_sw_ts)
-		frame->hw_ts = sw_ts;
-	else
-		frame->hw_ts = frame->app_ts;
+	if (use_hw_ts) {
+		frame->rx_ts = hw_ts;
+		frame->timestamp_source = SV_TIMESTAMP_SOURCE_HARDWARE;
+	} else if (use_sw_ts) {
+		frame->rx_ts = sw_ts;
+		frame->timestamp_source = SV_TIMESTAMP_SOURCE_SOFTWARE;
+	} else {
+		frame->rx_ts = frame->app_ts;
+		frame->timestamp_source = SV_TIMESTAMP_SOURCE_APPLICATION;
+	}
 
 	return 0;
 }

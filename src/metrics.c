@@ -67,6 +67,9 @@ struct sv_stream_metrics *metrics_get_stream(struct sv_metrics_state *ms,
 	}
 	atomic_store(&s->interval_hw_current_ns, 0);
 	atomic_store(&s->interval_app_current_ns, 0);
+	atomic_store(&s->timestamp_hardware_total, 0);
+	atomic_store(&s->timestamp_software_total, 0);
+	atomic_store(&s->timestamp_application_total, 0);
 	s->have_prev = 0;
 	s->active = 1;
 	pthread_mutex_unlock(&ms->stream_lock);
@@ -75,8 +78,9 @@ struct sv_stream_metrics *metrics_get_stream(struct sv_metrics_state *ms,
 
 int metrics_record_interval(struct sv_metrics_state *ms, uint16_t app_id,
 			    const char *sv_id, uint16_t smp_cnt,
-			    const struct sv_timestamp *hw_ts,
-			    const struct sv_timestamp *app_ts)
+			    const struct sv_timestamp *rx_ts,
+			    const struct sv_timestamp *app_ts,
+			    enum sv_timestamp_source source)
 {
 	struct sv_stream_metrics *s =
 		metrics_get_stream(ms, app_id, sv_id);
@@ -84,8 +88,8 @@ int metrics_record_interval(struct sv_metrics_state *ms, uint16_t app_id,
 		return -1;
 
 	pthread_mutex_lock(&ms->interval_lock);
-	if (s->have_prev) {
-		int64_t interval_hw_ns = ts_delta_ns(hw_ts, &s->last_hw_ts);
+	if (s->have_prev && s->last_timestamp_source == source) {
+		int64_t interval_hw_ns = ts_delta_ns(rx_ts, &s->last_rx_ts);
 		int64_t interval_app_ns = ts_delta_ns(app_ts, &s->last_app_ts);
 
 		atomic_store_explicit(&s->interval_hw_current_ns, interval_hw_ns,
@@ -96,12 +100,34 @@ int metrics_record_interval(struct sv_metrics_state *ms, uint16_t app_id,
 		histogram_record(&s->interval_app, interval_app_ns / 1000);
 	}
 	s->last_smp_cnt = smp_cnt;
-	s->last_hw_ts = *hw_ts;
+	s->last_rx_ts = *rx_ts;
 	s->last_app_ts = *app_ts;
+	s->last_timestamp_source = source;
 	s->have_prev = 1;
 	pthread_mutex_unlock(&ms->interval_lock);
 
 	return 0;
+}
+
+void metrics_record_timestamp_source(struct sv_stream_metrics *stream,
+				     enum sv_timestamp_source source)
+{
+	_Atomic uint64_t *counter;
+
+	switch (source) {
+	case SV_TIMESTAMP_SOURCE_HARDWARE:
+		counter = &stream->timestamp_hardware_total;
+		break;
+	case SV_TIMESTAMP_SOURCE_SOFTWARE:
+		counter = &stream->timestamp_software_total;
+		break;
+	case SV_TIMESTAMP_SOURCE_APPLICATION:
+		counter = &stream->timestamp_application_total;
+		break;
+	default:
+		return;
+	}
+	atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
 
 static int append_histogram(char **buf, size_t *cap, size_t *pos,
@@ -189,7 +215,7 @@ static int append_max(char **buf, size_t *cap, size_t *pos,
 	}
 
 	int n = snprintf(*buf + *pos, *cap - *pos,
-			 "# HELP %s Maximum observed NIC-to-application latency (us)\n"
+			 "# HELP %s Maximum observed RX-timestamp-to-application latency (us)\n"
 			 "# TYPE %s gauge\n"
 			 "%s{appid=\"0x%04X\",svid=\"%s\"} %lu\n",
 			 name, name, name, app_id, sv_id,
@@ -314,7 +340,7 @@ char *metrics_format(const struct sv_metrics_state *ms,
 
 		if (append_histogram(&buf, &cap, &pos,
 				     "sv_capture_latency_us",
-				     "Latency from NIC HW TS to app delivery (us)",
+				     "Latency from selected RX timestamp to app delivery (us)",
 				     &s->capture_latency, aid, sid) < 0)
 			goto fail;
 		if (append_observation_counts(&buf, &cap, &pos,
@@ -328,13 +354,39 @@ char *metrics_format(const struct sv_metrics_state *ms,
 
 		if (append_histogram(&buf, &cap, &pos,
 				     "sv_parsed_latency_us",
-				     "Latency from NIC HW TS to post-parse (us)",
+				     "Latency from selected RX timestamp to post-parse (us)",
 				     &s->parsed_latency, aid, sid) < 0)
 			goto fail;
 
+		if (pos + 1024 > cap) {
+			cap += 1024;
+			char *nb = realloc(buf, cap);
+			if (!nb)
+				goto fail;
+			buf = nb;
+		}
+		int n = snprintf(buf + pos, cap - pos,
+				 "# HELP sv_timestamp_source_frames_total Frames by selected timestamp source\n"
+				 "# TYPE sv_timestamp_source_frames_total counter\n"
+				 "sv_timestamp_source_frames_total{appid=\"0x%04X\",svid=\"%s\",source=\"hardware\"} %lu\n"
+				 "sv_timestamp_source_frames_total{appid=\"0x%04X\",svid=\"%s\",source=\"software\"} %lu\n"
+				 "sv_timestamp_source_frames_total{appid=\"0x%04X\",svid=\"%s\",source=\"application\"} %lu\n",
+				 aid, sid, (unsigned long)atomic_load_explicit(
+					 &s->timestamp_hardware_total,
+					 memory_order_relaxed),
+				 aid, sid, (unsigned long)atomic_load_explicit(
+					 &s->timestamp_software_total,
+					 memory_order_relaxed),
+				 aid, sid, (unsigned long)atomic_load_explicit(
+					 &s->timestamp_application_total,
+					 memory_order_relaxed));
+		if (n < 0)
+			goto fail;
+		pos += (size_t)n;
+
 		if (append_histogram(&buf, &cap, &pos,
 				     "sv_sv_interval_hw_us",
-				     "Interval between consecutive SV frames (HW timestamp)",
+				     "Interval between consecutive SV frames (selected RX timestamp)",
 				     &s->interval_hw, aid, sid) < 0)
 			goto fail;
 
@@ -355,8 +407,8 @@ char *metrics_format(const struct sv_metrics_state *ms,
 			&s->interval_hw_current_ns, memory_order_relaxed);
 		int64_t app_ns = atomic_load_explicit(
 			&s->interval_app_current_ns, memory_order_relaxed);
-		int n = snprintf(buf + pos, cap - pos,
-				 "# HELP sv_sv_interval_hw_current_us Latest interval between two received SV frames (HW timestamp)\n"
+		n = snprintf(buf + pos, cap - pos,
+				 "# HELP sv_sv_interval_hw_current_us Latest interval between two received SV frames (selected RX timestamp)\n"
 				 "# TYPE sv_sv_interval_hw_current_us gauge\n"
 				 "sv_sv_interval_hw_current_us{appid=\"0x%04X\",svid=\"%s\"} %.3f\n"
 				 "# HELP sv_sv_interval_app_current_us Latest interval between two received SV frames (app timestamp)\n"

@@ -22,23 +22,28 @@ static void test_intervals_count_every_frame_pair(void)
 	struct sv_timestamp hw = timestamp_us(1000);
 	struct sv_timestamp app = timestamp_us(1010);
 	assert(metrics_record_interval(&metrics, 0x4000, "S1", 10,
-				       &hw, &app) == 0);
+				       &hw, &app,
+				       SV_TIMESTAMP_SOURCE_SOFTWARE) == 0);
 
 	hw = timestamp_us(1250);
 	app = timestamp_us(1265);
 	assert(metrics_record_interval(&metrics, 0x4000, "S1", 12,
-				       &hw, &app) == 0);
+				       &hw, &app,
+				       SV_TIMESTAMP_SOURCE_SOFTWARE) == 0);
 
 	hw = timestamp_us(1490);
 	app = timestamp_us(1510);
 	assert(metrics_record_interval(&metrics, 0x4000, "S1", 0,
-				       &hw, &app) == 0);
+				       &hw, &app,
+				       SV_TIMESTAMP_SOURCE_SOFTWARE) == 0);
 
 	struct sv_stream_metrics *stream =
 		metrics_get_stream(&metrics, 0x4000, "S1");
 	assert(stream != NULL);
 	histogram_record(&stream->capture_latency, 23);
 	histogram_record(&stream->capture_latency, 728);
+	metrics_record_timestamp_source(stream, SV_TIMESTAMP_SOURCE_SOFTWARE);
+	metrics_record_timestamp_source(stream, SV_TIMESTAMP_SOURCE_SOFTWARE);
 	assert(atomic_load(&stream->interval_hw.count) == 2);
 	assert(atomic_load(&stream->interval_app.count) == 2);
 	assert(atomic_load(&stream->interval_hw_current_ns) == 240000);
@@ -60,7 +65,34 @@ static void test_intervals_count_every_frame_pair(void)
 		      "sv_capture_latency_us_observations_total{appid=\"0x4000\",svid=\"S1\",latency_us=\"727\"}") == NULL);
 	assert(strstr(output,
 		      "sv_capture_latency_us_max{appid=\"0x4000\",svid=\"S1\"} 728") != NULL);
+	assert(strstr(output,
+		      "sv_timestamp_source_frames_total{appid=\"0x4000\",svid=\"S1\",source=\"hardware\"} 0") != NULL);
+	assert(strstr(output,
+		      "sv_timestamp_source_frames_total{appid=\"0x4000\",svid=\"S1\",source=\"software\"} 2") != NULL);
 	free(output);
+}
+
+static void test_interval_resets_when_timestamp_source_changes(void)
+{
+	struct sv_metrics_state metrics;
+	struct sv_timestamp rx = timestamp_us(1000);
+	struct sv_timestamp app = timestamp_us(1010);
+
+	metrics_init(&metrics);
+	assert(metrics_record_interval(&metrics, 0x4000, "S1", 1,
+				       &rx, &app,
+				       SV_TIMESTAMP_SOURCE_HARDWARE) == 0);
+	rx = timestamp_us(200000);
+	app = timestamp_us(200010);
+	assert(metrics_record_interval(&metrics, 0x4000, "S1", 2,
+				       &rx, &app,
+				       SV_TIMESTAMP_SOURCE_SOFTWARE) == 0);
+
+	struct sv_stream_metrics *stream =
+		metrics_get_stream(&metrics, 0x4000, "S1");
+	assert(stream != NULL);
+	assert(atomic_load(&stream->interval_hw.count) == 0);
+	assert(atomic_load(&stream->interval_app.count) == 0);
 }
 
 static void test_observation_counts_are_exact(void)
@@ -125,6 +157,7 @@ int main(void)
 {
 	printf("=== Metrics Tests ===\n");
 	test_intervals_count_every_frame_pair();
+	test_interval_resets_when_timestamp_source_changes();
 	test_observation_counts_are_exact();
 	test_observation_counts_include_large_values();
 	printf("All metrics tests passed.\n");

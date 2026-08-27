@@ -117,8 +117,8 @@ static int run_direct(const struct sv_config *cfg)
 		struct sv_timestamp parsed_ts = timespec_to_svts(&parsed_now);
 
 		/* Compute deltas */
-		int64_t delta_capture = ts_delta_us(&frame.app_ts, &frame.hw_ts);
-		int64_t delta_parsed = ts_delta_us(&parsed_ts, &frame.hw_ts);
+		int64_t delta_capture = ts_delta_us(&frame.app_ts, &frame.rx_ts);
+		int64_t delta_parsed = ts_delta_us(&parsed_ts, &frame.rx_ts);
 
 		/* Record in histograms */
 		struct sv_stream_metrics *sm =
@@ -126,11 +126,14 @@ static int run_direct(const struct sv_config *cfg)
 		if (sm) {
 			histogram_record(&sm->capture_latency, delta_capture);
 			histogram_record(&sm->parsed_latency, delta_parsed);
+			metrics_record_timestamp_source(sm,
+						frame.timestamp_source);
 		}
 
 		metrics_record_interval(&metrics, info.app_id, info.sv_id,
-					info.smp_cnt, &frame.hw_ts,
-					&frame.app_ts);
+					info.smp_cnt, &frame.rx_ts,
+					&frame.app_ts,
+					frame.timestamp_source);
 
 		/* Track drops */
 		drop_tracker_process_at(&drops, &info, &frame.app_ts);

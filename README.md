@@ -1,10 +1,10 @@
 # SV Latencies Tracer
 
-IEC 61850 Sample Values (SV) latency measurement tool for the [SEAPATH](https://lfenergy.org/projects/seapath/) virtualization platform. Captures SV Ethernet frames (EtherType 0x88BA) with hardware timestamps and measures NIC-to-application delivery latency, exposing results as Prometheus metrics.
+IEC 61850 Sample Values (SV) latency measurement tool for the [SEAPATH](https://lfenergy.org/projects/seapath/) virtualization platform. Captures SV Ethernet frames (EtherType 0x88BA) with kernel receive timestamps and measures timestamp-to-application delivery latency, exposing results as Prometheus metrics.
 
 ## Features
 
-- Hardware timestamp capture via `AF_PACKET` + `SO_TIMESTAMPING`
+- Hardware or software timestamp capture via `AF_PACKET` + `SO_TIMESTAMPING`
 - PHC (PTP Hardware Clock) auto-discovery per interface
 - Minimal BER/ASN.1 SV parser (no libiec61850 dependency)
 - Lock-free latency histograms (1 µs resolution, 0-35000 µs)
@@ -104,18 +104,27 @@ sudo ./build/sv-subscriber -i eth0 -a 3 -s 2 --live-histogram
 ```
 
 The background display thread remains under `SCHED_OTHER`. For each SV stream,
-it shows the hardware-timestamp-to-application latency and the application
+it shows the selected-RX-timestamp-to-application latency and the application
 inter-frame interval, including min, p50, p99, max, a compact distribution, and
-the number of observations above the configured threshold.
+the number of observations above the configured threshold. Hardware, software,
+and application-fallback timestamp counts are shown separately.
+
+The tracer does not call `SIOCSHWTSTAMP`: that configuration is global to the
+network device and may be owned by `ptp4l` or another process. It requests both
+timestamp types from its socket, uses a hardware timestamp when the driver
+provides one and its PHC is available, and otherwise uses the software receive
+timestamp. Check `sv_timestamp_source_frames_total` before interpreting a
+latency histogram.
 
 ## Prometheus Metrics
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `sv_capture_latency_us` | histogram | NIC HW timestamp to application delivery (µs) |
-| `sv_capture_latency_us_max` | gauge | Maximum NIC-to-application latency since start (µs) |
+| `sv_capture_latency_us` | histogram | Selected RX timestamp to application delivery (µs) |
+| `sv_capture_latency_us_max` | gauge | Maximum RX-timestamp-to-application latency since start (µs) |
 | `sv_capture_latency_us_observations_total` | counter | Count of each exact observed latency (µs), including values above 35000 |
-| `sv_parsed_latency_us` | histogram | NIC HW timestamp to post-parse (µs) |
+| `sv_parsed_latency_us` | histogram | Selected RX timestamp to post-parse (µs) |
+| `sv_timestamp_source_frames_total` | counter | Frames selected from hardware, software, or application-fallback timestamps |
 | `sv_frames_total` | counter | Total SV frames received per stream |
 | `sv_drops_total` | counter | Dropped SV frames per stream (smpCnt gaps) |
 | `sv_link_up` | gauge | Network link state (1 = up) |

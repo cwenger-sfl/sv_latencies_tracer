@@ -9,18 +9,22 @@
 /* Per-stream metric data */
 struct sv_stream_metrics {
 	struct sv_stream_id id;
-	struct sv_histogram capture_latency;  /* T_app - T_hw */
-	struct sv_histogram parsed_latency;   /* T_parsed - T_hw */
-	struct sv_histogram interval_hw;      /* inter-sample, HW TS */
+	struct sv_histogram capture_latency;  /* T_app - T_rx */
+	struct sv_histogram parsed_latency;   /* T_parsed - T_rx */
+	struct sv_histogram interval_hw;      /* inter-sample, selected RX TS */
 	struct sv_histogram interval_app;     /* inter-sample, app TS */
 	_Atomic int64_t interval_hw_current_ns; /* latest inter-frame interval */
 	_Atomic int64_t interval_app_current_ns;
+	_Atomic uint64_t timestamp_hardware_total;
+	_Atomic uint64_t timestamp_software_total;
+	_Atomic uint64_t timestamp_application_total;
 	int active;
 
 	/* Interval bookkeeping (guarded by metrics_state.interval_lock) */
 	uint16_t last_smp_cnt;
-	struct sv_timestamp last_hw_ts;
+	struct sv_timestamp last_rx_ts;
 	struct sv_timestamp last_app_ts;
+	enum sv_timestamp_source last_timestamp_source;
 	int have_prev;
 };
 
@@ -55,8 +59,12 @@ void metrics_init_with_max(struct sv_metrics_state *ms, int histogram_max_us);
  */
 int metrics_record_interval(struct sv_metrics_state *ms, uint16_t app_id,
 			    const char *sv_id, uint16_t smp_cnt,
-			    const struct sv_timestamp *hw_ts,
-			    const struct sv_timestamp *app_ts);
+			    const struct sv_timestamp *rx_ts,
+			    const struct sv_timestamp *app_ts,
+			    enum sv_timestamp_source source);
+
+void metrics_record_timestamp_source(struct sv_stream_metrics *stream,
+				     enum sv_timestamp_source source);
 
 /*
  * Format all metrics in Prometheus text exposition format.

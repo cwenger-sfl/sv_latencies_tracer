@@ -201,7 +201,15 @@ static void render_live_histograms(struct sv_live_histogram_ctx *ctx,
 
 		fprintf(stderr, "Stream appid=0x%04X svid=%s\n",
 			stream->id.app_id, stream->id.sv_id);
-		print_stats("HTS -> application", &capture, ctx->threshold_us,
+		fprintf(stderr,
+			"  Timestamp source     hardware=%lu software=%lu application=%lu\n",
+			(unsigned long)atomic_load_explicit(
+				&stream->timestamp_hardware_total, memory_order_relaxed),
+			(unsigned long)atomic_load_explicit(
+				&stream->timestamp_software_total, memory_order_relaxed),
+			(unsigned long)atomic_load_explicit(
+				&stream->timestamp_application_total, memory_order_relaxed));
+		print_stats("RX TS -> application", &capture, ctx->threshold_us,
 			    stream->capture_latency.max_bucket_us);
 		print_stats("Application interval", &interval,
 			    ctx->threshold_us,

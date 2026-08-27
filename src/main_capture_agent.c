@@ -102,7 +102,7 @@ int main(int argc, char **argv)
 		r->app_id = info.app_id;
 		sv_copy_svid(r->sv_id, info.sv_id);
 		r->smp_cnt = info.smp_cnt;
-		r->hw_ts = frame.hw_ts;
+		r->hw_ts = frame.rx_ts;
 		batch_idx++;
 
 		if (batch_idx >= cfg.batch_size) {

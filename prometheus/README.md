@@ -37,11 +37,12 @@ Exposed by `sv-subscriber` on `/metrics`:
 
 | Metric                       | Type      | Description                                  |
 |------------------------------|-----------|----------------------------------------------|
-| `sv_capture_latency_us`      | histogram | NIC HW TS to app delivery (µs)               |
-| `sv_capture_latency_us_max`  | gauge     | Maximum NIC HW TS to app latency since start  |
+| `sv_capture_latency_us`      | histogram | Selected RX TS to app delivery (µs)          |
+| `sv_capture_latency_us_max`  | gauge     | Maximum selected RX TS to app latency         |
 | `sv_capture_latency_us_observations_total` | counter | Count per exact observed latency (µs), including values above 35000 |
-| `sv_parsed_latency_us`       | histogram | NIC HW TS to post-parse (µs)                 |
-| `sv_sv_interval_hw_us`       | histogram | Interval between frames (HW timestamp, µs)   |
+| `sv_parsed_latency_us`       | histogram | Selected RX TS to post-parse (µs)             |
+| `sv_timestamp_source_frames_total` | counter | Frames by selected timestamp source       |
+| `sv_sv_interval_hw_us`       | histogram | Interval between frames (selected RX timestamp, µs) |
 | `sv_sv_interval_app_us`      | histogram | Interval between frames (app timestamp, µs)  |
 | `sv_frames_total`            | counter   | Total SV frames received                     |
 | `sv_drops_total`             | counter   | Dropped sample counts                        |

@@ -31,6 +31,12 @@ struct sv_timestamp {
 	uint32_t nsec;
 };
 
+enum sv_timestamp_source {
+	SV_TIMESTAMP_SOURCE_HARDWARE,
+	SV_TIMESTAMP_SOURCE_SOFTWARE,
+	SV_TIMESTAMP_SOURCE_APPLICATION,
+};
+
 static inline int64_t ts_delta_us(const struct sv_timestamp *a,
 				  const struct sv_timestamp *b)
 {

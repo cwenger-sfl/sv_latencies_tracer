@@ -12,21 +12,22 @@ struct sv_capture_ctx {
 	int phc_fd;
 	int if_index;
 	clockid_t phc_clockid;
-	bool hw_timestamping;  /* true if NIC HW timestamping is active */
+	bool hw_timestamps_requested;
 	bool promisc_enabled;  /* true while this socket owns a promisc membership */
 };
 
 struct sv_captured_frame {
 	uint8_t            data[SV_FRAME_MAX_LEN];
 	size_t             len;
-	struct sv_timestamp hw_ts;     /* NIC hardware timestamp */
+	struct sv_timestamp rx_ts;     /* Selected hardware/software RX timestamp */
 	struct sv_timestamp app_ts;    /* Application timestamp (right after recvmsg) */
 	clockid_t          timestamp_clockid; /* Clock used for app_ts and parsed_ts */
+	enum sv_timestamp_source timestamp_source;
 };
 
 /*
- * Open a raw AF_PACKET socket on the given interface with HW timestamping
- * and BPF filter for EtherType 0x88BA.
+ * Open a raw AF_PACKET socket with RX timestamp requests and an SV BPF filter.
+ * Device-global hardware timestamp configuration is left unchanged.
  *
  * @param ctx       Output capture context.
  * @param ifname    Network interface name.

@@ -115,7 +115,8 @@ static void collector_match_subscriber(struct collector_state *st,
 	}
 
 	metrics_record_interval(&st->metrics, r->app_id, r->sv_id,
-				r->smp_cnt, &hw_ts, &r->app_ts);
+				r->smp_cnt, &hw_ts, &r->app_ts,
+				SV_TIMESTAMP_SOURCE_HARDWARE);
 
 	/* Track drops via subscriber records */
 	struct sv_frame_info info = {
