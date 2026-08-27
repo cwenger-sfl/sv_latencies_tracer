@@ -123,7 +123,7 @@ static void collector_match_subscriber(struct collector_state *st,
 		.smp_cnt = r->smp_cnt,
 	};
 	sv_copy_svid(info.sv_id, r->sv_id);
-	drop_tracker_process(&st->drops, &info);
+	drop_tracker_process_at(&st->drops, &info, &r->app_ts);
 }
 
 struct client_thread_args {

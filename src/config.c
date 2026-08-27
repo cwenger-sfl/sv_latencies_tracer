@@ -1,10 +1,25 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "config.h"
+#include "common.h"
 
 #include <getopt.h>
+#include <errno.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int parse_int(const char *text, int min, int max, int *value)
+{
+	char *end;
+	errno = 0;
+	long parsed = strtol(text, &end, 10);
+	if (errno == ERANGE || *text == '\0' || *end != '\0' ||
+	    parsed < min || parsed > max)
+		return -1;
+	*value = (int)parsed;
+	return 0;
+}
 
 void config_set_defaults(struct sv_config *cfg)
 {
@@ -18,7 +33,7 @@ void config_set_defaults(struct sv_config *cfg)
 		sizeof(cfg->collector_addr) - 1);
 	cfg->collector_port = 9200;
 	cfg->prometheus_port = 9100;
-	cfg->histogram_max_us = 500;
+	cfg->histogram_max_us = SV_HISTOGRAM_MAX_US;
 	cfg->batch_size = 256;
 	cfg->cpu_affinity = -1;
 	cfg->sched_fifo = 0;
@@ -37,7 +52,7 @@ void config_print_usage(const char *progname)
 		"  -m, --mode MODE           'direct' or 'split' (default: direct)\n"
 		"  -c, --collector ADDR:PORT Collector address (default: 127.0.0.1:9200)\n"
 		"  -P, --prometheus-port N   Prometheus port (default: 9100)\n"
-		"  -H, --histogram-max N     Max histogram bucket in us (default: 500)\n"
+		"  -H, --histogram-max N     Max histogram bucket in us (default: 35000)\n"
 		"  -b, --batch-size N        Batch size for split mode (default: 256)\n"
 		"  -a, --cpu-affinity N      CPU core to pin capture thread\n"
 		"  -s, --sched-fifo PRIO     Use SCHED_FIFO with given priority\n"
@@ -76,7 +91,10 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 			cfg->phc_device_set = 1;
 			break;
 		case 'v':
-			cfg->vlan_id = atoi(optarg);
+			if (parse_int(optarg, -1, 4095, &cfg->vlan_id) < 0) {
+				fprintf(stderr, "Invalid VLAN ID: %s\n", optarg);
+				return -1;
+			}
 			break;
 		case 'm':
 			if (strcmp(optarg, "direct") == 0)
@@ -92,32 +110,60 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 			char *colon = strrchr(optarg, ':');
 			if (colon) {
 				size_t addr_len = (size_t)(colon - optarg);
-				if (addr_len >= sizeof(cfg->collector_addr))
-					addr_len = sizeof(cfg->collector_addr) - 1;
+				int port;
+				if (addr_len == 0 || addr_len >= sizeof(cfg->collector_addr) ||
+				    parse_int(colon + 1, 1, 65535, &port) < 0) {
+					fprintf(stderr, "Invalid collector address: %s\n", optarg);
+					return -1;
+				}
 				memcpy(cfg->collector_addr, optarg, addr_len);
 				cfg->collector_addr[addr_len] = '\0';
-				cfg->collector_port = (uint16_t)atoi(colon + 1);
+				cfg->collector_port = (uint16_t)port;
 			} else {
+				if (*optarg == '\0' || strlen(optarg) >= sizeof(cfg->collector_addr)) {
+					fprintf(stderr, "Invalid collector address: %s\n", optarg);
+					return -1;
+				}
 				strncpy(cfg->collector_addr, optarg,
 					sizeof(cfg->collector_addr) - 1);
 			}
 			break;
 		}
-		case 'P':
-			cfg->prometheus_port = (uint16_t)atoi(optarg);
+		case 'P': {
+			int port;
+			if (parse_int(optarg, 1, 65535, &port) < 0) {
+				fprintf(stderr, "Invalid Prometheus port: %s\n", optarg);
+				return -1;
+			}
+			cfg->prometheus_port = (uint16_t)port;
 			break;
+		}
 		case 'H':
-			cfg->histogram_max_us = atoi(optarg);
+			if (parse_int(optarg, 0, SV_HISTOGRAM_MAX_US,
+				      &cfg->histogram_max_us) < 0) {
+				fprintf(stderr, "Invalid histogram maximum: %s\n", optarg);
+				return -1;
+			}
 			break;
 		case 'b':
-			cfg->batch_size = atoi(optarg);
+			if (parse_int(optarg, 1, 512, &cfg->batch_size) < 0) {
+				fprintf(stderr, "Invalid batch size: %s\n", optarg);
+				return -1;
+			}
 			break;
 		case 'a':
-			cfg->cpu_affinity = atoi(optarg);
+			if (parse_int(optarg, 0, CPU_SETSIZE - 1,
+				      &cfg->cpu_affinity) < 0) {
+				fprintf(stderr, "Invalid CPU affinity: %s\n", optarg);
+				return -1;
+			}
 			break;
 		case 's':
+			if (parse_int(optarg, 1, 99, &cfg->sched_priority) < 0) {
+				fprintf(stderr, "Invalid SCHED_FIFO priority: %s\n", optarg);
+				return -1;
+			}
 			cfg->sched_fifo = 1;
-			cfg->sched_priority = atoi(optarg);
 			break;
 		case 'h':
 			config_print_usage(argv[0]);
