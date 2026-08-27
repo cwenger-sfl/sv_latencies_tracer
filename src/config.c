@@ -33,6 +33,7 @@ void config_set_defaults(struct sv_config *cfg)
 		sizeof(cfg->collector_addr) - 1);
 	cfg->collector_port = 9200;
 	cfg->prometheus_port = 9100;
+	cfg->prometheus_enabled = 1;
 	cfg->histogram_max_us = SV_HISTOGRAM_MAX_US;
 	cfg->batch_size = 256;
 	cfg->cpu_affinity = -1;
@@ -40,6 +41,7 @@ void config_set_defaults(struct sv_config *cfg)
 	cfg->sched_priority = 0;
 	cfg->live_histogram = 0;
 	cfg->live_threshold_us = 250;
+	cfg->output_path_set = 0;
 }
 
 void config_print_usage(const char *progname)
@@ -54,6 +56,8 @@ void config_print_usage(const char *progname)
 		"  -m, --mode MODE           'direct' or 'split' (default: direct)\n"
 		"  -c, --collector ADDR:PORT Collector address (default: 127.0.0.1:9200)\n"
 		"  -P, --prometheus-port N   Prometheus port (default: 9100)\n"
+		"  -N, --no-prometheus       Disable the Prometheus endpoint\n"
+		"  -o, --output FILE         Write direct-mode samples as TSV\n"
 		"  -H, --histogram-max N     Max histogram bucket in us (default: 35000)\n"
 		"  -b, --batch-size N        Batch size for split mode (default: 256)\n"
 		"  -a, --cpu-affinity N      CPU core to pin capture thread\n"
@@ -73,6 +77,8 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 		{"mode",           required_argument, NULL, 'm'},
 		{"collector",      required_argument, NULL, 'c'},
 		{"prometheus-port", required_argument, NULL, 'P'},
+		{"no-prometheus",   no_argument,       NULL, 'N'},
+		{"output",          required_argument, NULL, 'o'},
 		{"histogram-max",  required_argument, NULL, 'H'},
 		{"batch-size",     required_argument, NULL, 'b'},
 		{"cpu-affinity",   required_argument, NULL, 'a'},
@@ -83,8 +89,10 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 		{NULL, 0, NULL, 0},
 	};
 
+	/* Allow callers and unit tests to parse more than one argument vector. */
+	optind = 1;
 	int opt;
-	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:H:b:a:s:LT:h",
+	while ((opt = getopt_long(argc, argv, "i:p:v:m:c:P:No:H:b:a:s:LT:h",
 				  long_opts, NULL)) != -1) {
 		switch (opt) {
 		case 'i':
@@ -144,6 +152,18 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 			cfg->prometheus_port = (uint16_t)port;
 			break;
 		}
+		case 'N':
+			cfg->prometheus_enabled = 0;
+			break;
+		case 'o':
+			if (*optarg == '\0' || strlen(optarg) >= sizeof(cfg->output_path)) {
+				fprintf(stderr, "Invalid output path: %s\n", optarg);
+				return -1;
+			}
+			strncpy(cfg->output_path, optarg,
+				sizeof(cfg->output_path) - 1);
+			cfg->output_path_set = 1;
+			break;
 		case 'H':
 			if (parse_int(optarg, 0, SV_HISTOGRAM_MAX_US,
 				      &cfg->histogram_max_us) < 0) {
@@ -200,6 +220,12 @@ int config_parse_args(struct sv_config *cfg, int argc, char **argv)
 	    cfg->live_threshold_us > cfg->histogram_max_us) {
 		fprintf(stderr,
 			"Live threshold must not exceed histogram maximum\n");
+		return -1;
+	}
+	if (cfg->output_path_set &&
+	    (cfg->role != SV_ROLE_SUBSCRIBER || cfg->mode != SV_MODE_DIRECT)) {
+		fprintf(stderr,
+			"Output files require sv-subscriber direct mode\n");
 		return -1;
 	}
 

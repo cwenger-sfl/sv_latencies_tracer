@@ -16,6 +16,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -52,6 +53,74 @@ static void apply_rt_settings(const struct sv_config *cfg)
 	}
 }
 
+static const char *timestamp_source_name(enum sv_timestamp_source source)
+{
+	switch (source) {
+	case SV_TIMESTAMP_SOURCE_HARDWARE:
+		return "hardware";
+	case SV_TIMESTAMP_SOURCE_SOFTWARE:
+		return "software";
+	case SV_TIMESTAMP_SOURCE_APPLICATION:
+		return "application";
+	}
+	return "unknown";
+}
+
+static FILE *open_output_file(const struct sv_config *cfg)
+{
+	if (!cfg->output_path_set)
+		return NULL;
+
+	FILE *output = fopen(cfg->output_path, "w");
+	if (!output) {
+		fprintf(stderr, "Cannot open output file '%s': %s\n",
+			cfg->output_path, strerror(errno));
+		return NULL;
+	}
+
+	if (fprintf(output,
+		    "# sv_latencies_tracer direct samples\n"
+		    "# app_id sv_id smp_cnt timestamp_source "
+		    "rx_sec rx_nsec app_sec app_nsec parsed_sec parsed_nsec "
+		    "capture_latency_us parsed_latency_us\n") < 0) {
+		fprintf(stderr, "Cannot write output file '%s': %s\n",
+			cfg->output_path, strerror(errno));
+		fclose(output);
+		return NULL;
+	}
+	return output;
+}
+
+static void close_output_file(FILE *output)
+{
+	if (output)
+		fclose(output);
+}
+
+static int write_output_sample(FILE *output, const struct sv_frame_info *info,
+			       const struct sv_captured_frame *frame,
+			       const struct sv_timestamp *parsed_ts,
+			       int64_t capture_latency_us,
+			       int64_t parsed_latency_us)
+{
+	if (!output)
+		return 0;
+
+	int result = fprintf(output,
+		"0x%04" PRIx16 "\t%s\t%" PRIu16 "\t%s\t"
+		"%" PRIu64 "\t%" PRIu32 "\t"
+		"%" PRIu64 "\t%" PRIu32 "\t"
+		"%" PRIu64 "\t%" PRIu32 "\t"
+		"%" PRId64 "\t%" PRId64 "\n",
+		info->app_id, info->sv_id, info->smp_cnt,
+		timestamp_source_name(frame->timestamp_source),
+		frame->rx_ts.sec, frame->rx_ts.nsec,
+		frame->app_ts.sec, frame->app_ts.nsec,
+		parsed_ts->sec, parsed_ts->nsec,
+		capture_latency_us, parsed_latency_us);
+	return result < 0 ? -1 : 0;
+}
+
 /*
  * Direct mode (Scenario A): capture, parse, measure, record.
  */
@@ -62,21 +131,30 @@ static int run_direct(const struct sv_config *cfg)
 	struct sv_drop_tracker drops;
 	struct sv_sysmon_ctx sysmon;
 	struct sv_live_histogram_ctx live_histogram;
+	FILE *output = open_output_file(cfg);
+	if (cfg->output_path_set && !output)
+		return 1;
 
 	metrics_init_with_max(&metrics, cfg->histogram_max_us);
 	drop_tracker_init(&drops);
 
 	const char *phc = cfg->phc_device_set ? cfg->phc_device : NULL;
-	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id) < 0)
+	if (capture_open(&capture, cfg->interface, phc, cfg->vlan_id) < 0) {
+		close_output_file(output);
 		return 1;
+	}
 
-	if (metrics_server_start(cfg->prometheus_port, &metrics, &drops) < 0) {
+	if (cfg->prometheus_enabled &&
+	    metrics_server_start(cfg->prometheus_port, &metrics, &drops) < 0) {
+		close_output_file(output);
 		capture_close(&capture);
 		return 1;
 	}
 
 	if (sysmon_start(&sysmon, &metrics, cfg->interface) < 0) {
-		metrics_server_stop();
+		if (cfg->prometheus_enabled)
+			metrics_server_stop();
+		close_output_file(output);
 		capture_close(&capture);
 		return 1;
 	}
@@ -84,7 +162,9 @@ static int run_direct(const struct sv_config *cfg)
 	    live_histogram_start(&live_histogram, &metrics,
 				 cfg->live_threshold_us) < 0) {
 		sysmon_stop(&sysmon);
-		metrics_server_stop();
+		if (cfg->prometheus_enabled)
+			metrics_server_stop();
+		close_output_file(output);
 		capture_close(&capture);
 		return 1;
 	}
@@ -92,8 +172,13 @@ static int run_direct(const struct sv_config *cfg)
 	/* Keep monitoring and metrics threads off the real-time capture policy. */
 	apply_rt_settings(cfg);
 
-	fprintf(stderr, "sv-subscriber: direct mode on %s, metrics on :%u\n",
-		cfg->interface, cfg->prometheus_port);
+	if (cfg->prometheus_enabled)
+		fprintf(stderr,
+			"sv-subscriber: direct mode on %s, metrics on :%u\n",
+			cfg->interface, cfg->prometheus_port);
+	else
+		fprintf(stderr, "sv-subscriber: direct mode on %s\n",
+			cfg->interface);
 
 	struct sv_captured_frame frame;
 	while (g_running) {
@@ -137,14 +222,24 @@ static int run_direct(const struct sv_config *cfg)
 
 		/* Track drops */
 		drop_tracker_process_at(&drops, &info, &frame.app_ts);
+		if (write_output_sample(output, &info, &frame, &parsed_ts,
+					 delta_capture, delta_parsed) < 0) {
+			fprintf(stderr, "Cannot write output file '%s': %s\n",
+				cfg->output_path, strerror(errno));
+			break;
+		}
 	}
 
 	fprintf(stderr, "\nShutting down...\n");
 	if (cfg->live_histogram)
 		live_histogram_stop(&live_histogram);
 	sysmon_stop(&sysmon);
-	metrics_server_stop();
+	if (cfg->prometheus_enabled)
+		metrics_server_stop();
 	capture_close(&capture);
+	if (output && fclose(output) != 0)
+		fprintf(stderr, "Cannot close output file '%s': %s\n",
+			cfg->output_path, strerror(errno));
 	return 0;
 }
 

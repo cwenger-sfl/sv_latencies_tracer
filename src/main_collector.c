@@ -194,7 +194,8 @@ int main(int argc, char **argv)
 	drop_tracker_init(&state.drops);
 	pthread_mutex_init(&state.lock, NULL);
 
-	if (metrics_server_start(cfg.prometheus_port, &state.metrics,
+	if (cfg.prometheus_enabled &&
+	    metrics_server_start(cfg.prometheus_port, &state.metrics,
 				 &state.drops) < 0)
 		return 1;
 
@@ -257,7 +258,8 @@ int main(int argc, char **argv)
 	}
 
 	close(listen_fd);
-	metrics_server_stop();
+	if (cfg.prometheus_enabled)
+		metrics_server_stop();
 	pthread_mutex_destroy(&state.lock);
 	return 0;
 }

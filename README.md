@@ -14,6 +14,7 @@ IEC 61850 Sample Values (SV) latency measurement tool for the [SEAPATH](https://
 - Split-architecture support for virtualized deployments
 - Real-time scheduling (`SCHED_FIFO`) and CPU affinity pinning
 - Optional cumulative live latency histograms in the console
+- Optional TSV sample output from `sv-subscriber`
 
 ## Building
 
@@ -47,6 +48,17 @@ For bare-metal or SR-IOV passthrough where the application has direct NIC access
 ```bash
 sudo ./build/sv-subscriber -i eth0 -P 9100
 ```
+
+To write one detailed TSV record per received SV frame, use `--output`:
+
+```bash
+sudo ./build/sv-subscriber -i eth0 --output /tmp/results.tsv
+```
+
+The output contains the stream identity, sample counter, timestamp source,
+the RX/application/parsed timestamps, and both measured latencies. Disable
+the Prometheus endpoint with `--no-prometheus` when only the file is needed.
+The output option is currently available in direct mode only.
 
 ### Scenario B: Split Mode
 
@@ -86,6 +98,8 @@ sudo ./build/sv-subscriber -i eth0 -m split -c collector-host:9200
 | `-m` | `--mode` | `direct` or `split` | `direct` |
 | `-c` | `--collector` | Collector `ADDR:PORT` | `127.0.0.1:9200` |
 | `-P` | `--prometheus-port` | Metrics HTTP port | `9100` |
+| `-N` | `--no-prometheus` | Disable the Prometheus endpoint | enabled |
+| `-o` | `--output` | Write direct-mode samples as TSV | unset |
 | `-H` | `--histogram-max` | Max histogram bucket (µs) | `35000` |
 | `-b` | `--batch-size` | Batch size (split mode) | `256` |
 | `-a` | `--cpu-affinity` | Pin capture thread to CPU | unset |
